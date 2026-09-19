@@ -1,0 +1,49 @@
+export declare class AuthService {
+    /**
+     * Log in user with phone number and password.
+     */
+    static login(phone: string, passwordPlaintext: string, ipAddress?: string, userAgent?: string): Promise<{
+        accessToken: string;
+        token: string;
+        user: {
+            id: any;
+            name: any;
+            phone: any;
+            role: any;
+            status: any;
+            projectId: any;
+            project_id: any;
+            projectName: any;
+            project_name: any;
+            siteId: any;
+            site_id: any;
+            siteName: any;
+            site_name: any;
+            assignedProjects: any;
+            assignedSites: any;
+        };
+    }>;
+    /**
+     * Get user's assigned project and site details.
+     */
+    static getUserAssignments(userId: string): Promise<{
+        assignedProjects: any;
+        assignedSites: any;
+        primaryProject: any;
+        primaryProjectId: any;
+        primarySite: any;
+        primarySiteId: any;
+    }>;
+    /**
+     * Log out user.
+     */
+    static logout(userId: string, ipAddress?: string, userAgent?: string): Promise<void>;
+    /**
+     * Change user password.
+     */
+    static changePassword(userId: string, currentPasswordPlaintext: string, newPasswordPlaintext: string, ipAddress?: string, userAgent?: string): Promise<void>;
+    /**
+     * Request password reset instructions.
+     */
+    static forgotPassword(phone: string, ipAddress?: string, userAgent?: string): Promise<string>;
+}
