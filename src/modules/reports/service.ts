@@ -183,7 +183,7 @@ export class ReportService {
       throw new Error('Selected site does not belong to the specified project');
     }
 
-    // 2. Verify user is assigned to both project and site (unless Admin/PM)
+    // 2. Verify user is assigned to project or site (unless Admin/PM)
     if (userRole !== UserRole.ADMIN && userRole !== UserRole.PROJECT_MANAGER) {
       const [projectAssignment] = await db
         .select()
@@ -191,18 +191,14 @@ export class ReportService {
         .where(and(eq(userProjectAssignments.userId, userId), eq(userProjectAssignments.projectId, input.projectId)))
         .limit(1);
 
-      if (!projectAssignment) {
-        throw new Error('You are not authorized to submit reports for this project');
-      }
-
       const [siteAssignment] = await db
         .select()
         .from(userSiteAssignments)
         .where(and(eq(userSiteAssignments.userId, userId), eq(userSiteAssignments.siteId, input.siteId)))
         .limit(1);
 
-      if (!siteAssignment) {
-        throw new Error('You are not authorized to submit reports for this site');
+      if (!siteAssignment && !projectAssignment) {
+        throw new Error('You are not authorized to submit reports for this site or project');
       }
     }
 

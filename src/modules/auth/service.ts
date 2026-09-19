@@ -3,11 +3,11 @@ import { users } from '../../database/schema/users.js';
 import { projects } from '../../database/schema/projects.js';
 import { sites } from '../../database/schema/sites.js';
 import { userProjectAssignments, userSiteAssignments } from '../../database/schema/assignments.js';
-import { eq } from 'drizzle-orm';
+import { eq, asc, inArray } from 'drizzle-orm';
 import { verifyPassword, hashPassword } from '../../utils/password.js';
 import { generateToken } from '../../utils/jwt.js';
 import { recordAudit } from '../audit/service.js';
-import { AuditAction, UserStatus, type UserRoleType } from '../../config/constants.js';
+import { AuditAction, UserStatus, UserRole, ProjectStatus, SiteStatus, type UserRoleType } from '../../config/constants.js';
 
 export class AuthService {
   /**
@@ -117,25 +117,78 @@ export class AuthService {
    */
   static async getUserAssignments(userId: string) {
     const db = getDb();
+    const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+
+    // Admins and Project Managers have universal access to all active projects and sites
+    if (user?.role === UserRole.ADMIN || user?.role === UserRole.PROJECT_MANAGER) {
+      const allProjects = await db
+        .select({ id: projects.id, name: projects.name })
+        .from(projects)
+        .where(eq(projects.status, ProjectStatus.ACTIVE))
+        .orderBy(asc(projects.name));
+
+      const allSites = await db
+        .select({ id: sites.id, name: sites.name, projectId: sites.projectId })
+        .from(sites)
+        .where(eq(sites.status, SiteStatus.ACTIVE))
+        .orderBy(asc(sites.name));
+
+      return {
+        assignedProjects: allProjects,
+        assignedSites: allSites,
+        primaryProject: allProjects[0]?.name ?? null,
+        primaryProjectId: allProjects[0]?.id ?? null,
+        primarySite: allSites[0]?.name ?? null,
+        primarySiteId: allSites[0]?.id ?? null,
+      };
+    }
+
+    // Explicitly assigned projects
     const assignedProjects = await db
       .select({ id: projects.id, name: projects.name })
       .from(userProjectAssignments)
       .innerJoin(projects, eq(userProjectAssignments.projectId, projects.id))
-      .where(eq(userProjectAssignments.userId, userId));
+      .where(eq(userProjectAssignments.userId, userId))
+      .orderBy(asc(projects.name));
 
-    const assignedSites = await db
+    // Explicitly assigned sites
+    const explicitSites = await db
       .select({ id: sites.id, name: sites.name, projectId: sites.projectId })
       .from(userSiteAssignments)
       .innerJoin(sites, eq(userSiteAssignments.siteId, sites.id))
-      .where(eq(userSiteAssignments.userId, userId));
+      .where(eq(userSiteAssignments.userId, userId))
+      .orderBy(asc(sites.name));
+
+    // Also include active sites of assigned projects to ensure field engineers can report on their assigned projects' sites
+    const projectIds = assignedProjects.map((p: any) => p.id);
+    let projectSites: typeof explicitSites = [];
+    if (projectIds.length > 0) {
+      projectSites = await db
+        .select({ id: sites.id, name: sites.name, projectId: sites.projectId })
+        .from(sites)
+        .where(inArray(sites.projectId, projectIds))
+        .orderBy(asc(sites.name));
+    }
+
+    // Merge distinct sites
+    const siteMap = new Map<string, typeof explicitSites[0]>();
+    for (const s of explicitSites) {
+      siteMap.set(s.id, s);
+    }
+    for (const s of projectSites) {
+      if (!siteMap.has(s.id)) {
+        siteMap.set(s.id, s);
+      }
+    }
+    const combinedSites = Array.from(siteMap.values());
 
     return {
       assignedProjects,
-      assignedSites,
+      assignedSites: combinedSites,
       primaryProject: assignedProjects[0]?.name ?? null,
       primaryProjectId: assignedProjects[0]?.id ?? null,
-      primarySite: assignedSites[0]?.name ?? null,
-      primarySiteId: assignedSites[0]?.id ?? null,
+      primarySite: combinedSites[0]?.name ?? null,
+      primarySiteId: combinedSites[0]?.id ?? null,
     };
   }
 

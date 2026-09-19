@@ -19,7 +19,7 @@ export const laborCategoryRoutes = async (fastify) => {
                 type: 'object',
                 properties: {
                     includeInactive: { type: 'boolean' },
-                    categoryType: { type: 'string', enum: ['skilled', 'unskilled', 'supervisory'] },
+                    categoryType: { type: 'string' },
                 },
             },
         },
@@ -45,10 +45,105 @@ export const laborCategoryRoutes = async (fastify) => {
             .orderBy(asc(laborCategories.categoryType), asc(laborCategories.orderIndex), asc(laborCategories.name));
         return reply.send(successResponse(categories, 'Labor categories retrieved successfully'));
     });
+    // GET /api/v1/labor-categories/classifications
+    fastify.get('/classifications', {
+        schema: {
+            description: 'Get all distinct labor category classifications with counts',
+            tags: ['Labor Categories'],
+            security: [{ bearerAuth: [] }],
+        },
+    }, async (request, reply) => {
+        const db = getDb();
+        const distinctTypes = await db
+            .select({
+            classification: laborCategories.categoryType,
+            total: sql `count(*)::int`,
+            activeCount: sql `count(*) filter (where ${laborCategories.isActive} = true)::int`,
+        })
+            .from(laborCategories)
+            .groupBy(laborCategories.categoryType)
+            .orderBy(asc(laborCategories.categoryType));
+        return reply.send(successResponse(distinctTypes, 'Labor classifications retrieved successfully'));
+    });
+    // PUT /api/v1/labor-categories/classifications/rename (Admin only)
+    fastify.put('/classifications/rename', {
+        schema: {
+            description: 'Rename an entire classification across all assigned labor categories',
+            tags: ['Labor Categories'],
+            security: [{ bearerAuth: [] }],
+            body: {
+                type: 'object',
+                required: ['oldClassification', 'newClassification'],
+                properties: {
+                    oldClassification: { type: 'string', minLength: 1, maxLength: 50 },
+                    newClassification: { type: 'string', minLength: 1, maxLength: 50 },
+                },
+            },
+        },
+    }, async (request, reply) => {
+        const user = request.user;
+        if (user.role !== UserRole.ADMIN) {
+            return reply.status(403).send(errorResponse('FORBIDDEN', 'Only administrators can rename classifications'));
+        }
+        const body = request.body;
+        const oldClassification = (body.oldClassification || '').trim();
+        const newClassification = (body.newClassification || '').trim();
+        if (!oldClassification || !newClassification) {
+            return reply.status(400).send(errorResponse('BAD_REQUEST', 'Classification names cannot be empty'));
+        }
+        if (oldClassification.toLowerCase() === newClassification.toLowerCase()) {
+            return reply.status(400).send(errorResponse('BAD_REQUEST', 'New classification name must be different'));
+        }
+        const db = getDb();
+        // Check if categories exist with old classification
+        const existingOld = await db
+            .select()
+            .from(laborCategories)
+            .where(eq(laborCategories.categoryType, oldClassification));
+        if (existingOld.length === 0) {
+            return reply.status(404).send(errorResponse('NOT_FOUND', `No categories found under classification "${oldClassification}"`));
+        }
+        // Check for name collisions under new classification
+        const existingNew = await db
+            .select({ name: sql `lower(${laborCategories.name})` })
+            .from(laborCategories)
+            .where(eq(laborCategories.categoryType, newClassification));
+        const newNames = new Set(existingNew.map((e) => e.name));
+        const colliding = existingOld.find((c) => newNames.has(c.name.toLowerCase()));
+        if (colliding) {
+            return reply.status(409).send(errorResponse('CONFLICT', `Cannot rename: category "${colliding.name}" already exists in classification "${newClassification}"`));
+        }
+        // Perform update
+        await db
+            .update(laborCategories)
+            .set({
+            categoryType: newClassification,
+            updatedAt: new Date(),
+        })
+            .where(eq(laborCategories.categoryType, oldClassification));
+        await recordAudit({
+            userId: user.id,
+            action: AuditAction.LABOR_CATEGORY_UPDATED,
+            entityType: 'labor_category',
+            metadata: {
+                action: 'rename_classification',
+                oldClassification,
+                newClassification,
+                affectedCount: existingOld.length,
+            },
+            ipAddress: request.ip,
+            userAgent: request.headers['user-agent'],
+        });
+        return reply.send(successResponse({
+            renamedFrom: oldClassification,
+            renamedTo: newClassification,
+            affectedCount: existingOld.length,
+        }, `Successfully renamed classification "${oldClassification}" to "${newClassification}"`));
+    });
     // POST /api/v1/labor-categories (Admin only)
     fastify.post('/', {
         schema: {
-            description: 'Create a new labor category',
+            description: 'Create a new labor category with flexible classification',
             tags: ['Labor Categories'],
             security: [{ bearerAuth: [] }],
             body: {
@@ -56,7 +151,7 @@ export const laborCategoryRoutes = async (fastify) => {
                 required: ['name', 'categoryType'],
                 properties: {
                     name: { type: 'string', minLength: 1, maxLength: 255 },
-                    categoryType: { type: 'string', enum: ['skilled', 'unskilled', 'supervisory'] },
+                    categoryType: { type: 'string', minLength: 1, maxLength: 50 },
                     orderIndex: { type: 'integer', minimum: 0 },
                     isActive: { type: 'boolean' },
                 },
@@ -69,20 +164,24 @@ export const laborCategoryRoutes = async (fastify) => {
         }
         const body = request.body;
         const name = body.name.trim();
+        const categoryType = body.categoryType.trim();
         if (!name) {
             return reply.status(400).send(errorResponse('BAD_REQUEST', 'Category name cannot be empty'));
+        }
+        if (!categoryType) {
+            return reply.status(400).send(errorResponse('BAD_REQUEST', 'Category classification cannot be empty'));
         }
         const db = getDb();
         // Check case-insensitive duplicate in the same categoryType
         const [existing] = await db
             .select()
             .from(laborCategories)
-            .where(and(eq(laborCategories.categoryType, body.categoryType), sql `lower(${laborCategories.name}) = lower(${name})`))
+            .where(and(eq(laborCategories.categoryType, categoryType), sql `lower(${laborCategories.name}) = lower(${name})`))
             .limit(1);
         if (existing) {
             return reply
                 .status(409)
-                .send(errorResponse('DUPLICATE_CATEGORY', `A category named "${name}" already exists under ${body.categoryType}`));
+                .send(errorResponse('DUPLICATE_CATEGORY', `A category named "${name}" already exists under ${categoryType}`));
         }
         // Determine orderIndex if not provided
         let orderIndex = body.orderIndex;
@@ -90,14 +189,14 @@ export const laborCategoryRoutes = async (fastify) => {
             const [maxOrder] = await db
                 .select({ max: sql `COALESCE(MAX(${laborCategories.orderIndex}), 0)` })
                 .from(laborCategories)
-                .where(eq(laborCategories.categoryType, body.categoryType));
+                .where(eq(laborCategories.categoryType, categoryType));
             orderIndex = Number(maxOrder?.max ?? 0) + 1;
         }
         const [newCategory] = await db
             .insert(laborCategories)
             .values({
             name,
-            categoryType: body.categoryType,
+            categoryType,
             orderIndex,
             isActive: body.isActive !== undefined ? body.isActive : true,
         })
@@ -134,7 +233,7 @@ export const laborCategoryRoutes = async (fastify) => {
                 type: 'object',
                 properties: {
                     name: { type: 'string', minLength: 1, maxLength: 255 },
-                    categoryType: { type: 'string', enum: ['skilled', 'unskilled', 'supervisory'] },
+                    categoryType: { type: 'string', minLength: 1, maxLength: 50 },
                     orderIndex: { type: 'integer', minimum: 0 },
                     isActive: { type: 'boolean' },
                 },
@@ -163,7 +262,11 @@ export const laborCategoryRoutes = async (fastify) => {
             updateData.name = trimmed;
         }
         if (body.categoryType !== undefined) {
-            updateData.categoryType = body.categoryType;
+            const trimmedType = body.categoryType.trim();
+            if (!trimmedType) {
+                return reply.status(400).send(errorResponse('BAD_REQUEST', 'Category classification cannot be empty'));
+            }
+            updateData.categoryType = trimmedType;
         }
         if (body.orderIndex !== undefined) {
             updateData.orderIndex = body.orderIndex;

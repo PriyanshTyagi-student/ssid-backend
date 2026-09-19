@@ -19,9 +19,10 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
         tags: ['Authentication'],
         body: {
           type: 'object',
-          required: ['phone', 'password'],
+          required: ['password'],
           properties: {
-            phone: { type: 'string', description: '10-digit phone or with +91 prefix' },
+            phone: { type: 'string', description: '10-digit phone, with +91 prefix, or username' },
+            phoneNumber: { type: 'string', description: 'Alternative phone field name' },
             password: { type: 'string', minLength: 6 },
           },
         },
