@@ -5,6 +5,7 @@ node_modules/
 build/
 
 # Embedded database & runtime data
+/data
 data/
 *.sqlite
 *.sqlite3
