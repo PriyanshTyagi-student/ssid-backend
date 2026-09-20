@@ -6,7 +6,7 @@ import { users } from '../../database/schema/users.js';
 import { successResponse, errorResponse } from '../../utils/response.js';
 import { recordAudit } from '../audit/service.js';
 import { AuditAction, UserRole } from '../../config/constants.js';
-import { eq, and, asc, sql } from 'drizzle-orm';
+import { eq, and, asc, sql, ilike, or } from 'drizzle-orm';
 export const laborCategoryRoutes = async (fastify) => {
     // Authentication hook for all routes
     fastify.addHook('preHandler', authenticate);
@@ -190,7 +190,7 @@ export const laborCategoryRoutes = async (fastify) => {
         const [existing] = await db
             .select()
             .from(laborClassifications)
-            .where(eq(laborClassifications.code, code))
+            .where(or(eq(laborClassifications.code, code), eq(laborClassifications.code, code.toLowerCase()), ilike(laborClassifications.code, code), ilike(laborClassifications.name, code)))
             .limit(1);
         if (!existing) {
             return reply.status(404).send(errorResponse('NOT_FOUND', `Classification "${code}" not found`));
@@ -267,24 +267,48 @@ export const laborCategoryRoutes = async (fastify) => {
         const { code } = request.params;
         const { cascade } = request.query || {};
         const db = getDb();
+        // Find classification case-insensitively by code or name
         const [classification] = await db
             .select()
             .from(laborClassifications)
-            .where(eq(laborClassifications.code, code))
+            .where(or(eq(laborClassifications.code, code), eq(laborClassifications.code, code.toLowerCase()), ilike(laborClassifications.code, code), ilike(laborClassifications.name, code)))
             .limit(1);
         if (!classification) {
+            // If classification record does not exist in labor_classifications table,
+            // check if there are orphaned categories matching this code (case-insensitively)
+            const [orphanedCount] = await db
+                .select({ count: sql `count(*)::int` })
+                .from(laborCategories)
+                .where(or(eq(laborCategories.categoryType, code), eq(laborCategories.categoryType, code.toLowerCase()), ilike(laborCategories.categoryType, code)));
+            const oCount = Number(orphanedCount?.count ?? 0);
+            if (oCount > 0) {
+                if (cascade) {
+                    await db.delete(laborCategories).where(or(eq(laborCategories.categoryType, code), eq(laborCategories.categoryType, code.toLowerCase()), ilike(laborCategories.categoryType, code)));
+                    return reply.send(successResponse({ code }, `Deleted ${oCount} labor categories belonging to "${code}"`));
+                }
+                else {
+                    return reply.status(409).send({
+                        success: false,
+                        error: {
+                            code: 'CLASSIFICATION_IN_USE',
+                            message: `Cannot delete classification "${code}" because it contains ${oCount} labor categories. Pass cascade=true to delete both classification and its categories.`,
+                        },
+                    });
+                }
+            }
             return reply.status(404).send(errorResponse('NOT_FOUND', `Classification "${code}" not found`));
         }
-        // Check if categories are assigned to this classification
+        // Check if categories are assigned to this classification (case-insensitive)
+        const targetCode = classification.code;
         const [categoryCount] = await db
             .select({ count: sql `count(*)::int` })
             .from(laborCategories)
-            .where(eq(laborCategories.categoryType, code));
+            .where(or(eq(laborCategories.categoryType, targetCode), ilike(laborCategories.categoryType, targetCode), eq(laborCategories.categoryType, code), ilike(laborCategories.categoryType, code)));
         const count = Number(categoryCount?.count ?? 0);
         if (count > 0) {
             if (cascade) {
                 // Cascade delete all child categories
-                await db.delete(laborCategories).where(eq(laborCategories.categoryType, code));
+                await db.delete(laborCategories).where(or(eq(laborCategories.categoryType, targetCode), ilike(laborCategories.categoryType, targetCode), eq(laborCategories.categoryType, code), ilike(laborCategories.categoryType, code)));
             }
             else {
                 return reply.status(409).send({
