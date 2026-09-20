@@ -4,8 +4,8 @@ import { authenticate } from '../../middleware/auth.js';
 import { getDb } from '../../database/connection.js';
 import { projects } from '../../database/schema/projects.js';
 import { sites } from '../../database/schema/sites.js';
-import { reports } from '../../database/schema/reports.js';
-import { userProjectAssignments } from '../../database/schema/assignments.js';
+import { reports, reportSections, reportEntries } from '../../database/schema/reports.js';
+import { userProjectAssignments, userSiteAssignments } from '../../database/schema/assignments.js';
 import { eq, inArray, count } from 'drizzle-orm';
 import { successResponse, errorResponse } from '../../utils/response.js';
 import { recordAudit } from '../audit/service.js';
@@ -258,13 +258,25 @@ export const projectRoutes: FastifyPluginAsync = async (fastify) => {
     '/:id',
     {
       schema: {
-        description: 'Delete project and related site records if no reports exist (Admin only)',
+        description: 'Delete project and related site records (Admin only)',
         tags: ['Projects'],
         security: [{ bearerAuth: [] }],
+        params: {
+          type: 'object',
+          required: ['id'],
+          properties: { id: { type: 'string', format: 'uuid' } },
+        },
+        querystring: {
+          type: 'object',
+          properties: {
+            cascade: { type: 'boolean' },
+          },
+        },
       },
     },
     async (request, reply) => {
       const { id } = request.params as { id: string };
+      const { cascade } = (request.query as { cascade?: boolean }) || {};
       const user = request.user!;
       if (user.role !== UserRole.ADMIN) {
         return reply.status(403).send(errorResponse('FORBIDDEN', 'Only administrators can delete projects'));
@@ -282,25 +294,55 @@ export const projectRoutes: FastifyPluginAsync = async (fastify) => {
         .from(reports)
         .where(eq(reports.projectId, id));
 
-      if (Number(linkedReports.count) > 0) {
-        return reply
-          .status(409)
-          .send(
-            errorResponse(
-              'CONFLICT',
-              `Cannot delete project "${existing.name}" because ${linkedReports.count} report(s) are associated with it. Please archive the project instead.`
-            )
-          );
+      const reportCount = Number(linkedReports.count);
+      if (reportCount > 0) {
+        if (!cascade) {
+          return reply
+            .status(409)
+            .send(
+              errorResponse(
+                'CONFLICT',
+                `Cannot delete project "${existing.name}" because ${reportCount} report(s) are associated with it. Pass cascade=true to force delete the project and all its reports.`
+              )
+            );
+        }
       }
 
-      await db.delete(projects).where(eq(projects.id, id));
+      await db.transaction(async (tx: any) => {
+        // 1. If reports exist, cascade delete entries, sections, and reports
+        const projectReports = await tx.select({ id: reports.id }).from(reports).where(eq(reports.projectId, id));
+        const reportIds = projectReports.map((r: any) => r.id);
+        if (reportIds.length > 0) {
+          const sections = await tx.select({ id: reportSections.id }).from(reportSections).where(inArray(reportSections.reportId, reportIds));
+          const sectionIds = sections.map((s: any) => s.id);
+          if (sectionIds.length > 0) {
+            await tx.delete(reportEntries).where(inArray(reportEntries.sectionId, sectionIds));
+            await tx.delete(reportSections).where(inArray(reportSections.reportId, reportIds));
+          }
+          await tx.delete(reports).where(eq(reports.projectId, id));
+        }
+
+        // 2. Delete site assignments for sites in this project
+        const projectSites = await tx.select({ id: sites.id }).from(sites).where(eq(sites.projectId, id));
+        const siteIds = projectSites.map((s: any) => s.id);
+        if (siteIds.length > 0) {
+          await tx.delete(userSiteAssignments).where(inArray(userSiteAssignments.siteId, siteIds));
+          await tx.delete(sites).where(eq(sites.projectId, id));
+        }
+
+        // 3. Delete project assignments
+        await tx.delete(userProjectAssignments).where(eq(userProjectAssignments.projectId, id));
+
+        // 4. Delete project
+        await tx.delete(projects).where(eq(projects.id, id));
+      });
 
       await recordAudit({
         userId: user.id,
         action: AuditAction.PROJECT_DELETED,
         entityType: 'project',
         entityId: id,
-        metadata: { projectName: existing.name, projectCode: existing.projectCode },
+        metadata: { projectName: existing.name, projectCode: existing.projectCode, cascade: !!cascade, deletedReportsCount: reportCount },
         ipAddress: request.ip,
         userAgent: request.headers['user-agent'],
       });

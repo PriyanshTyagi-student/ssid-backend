@@ -90,4 +90,32 @@ export class AuthController {
       return reply.status(400).send(errorResponse('BAD_REQUEST', err.message));
     }
   }
+
+  static async setupStatus(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const status = await AuthService.getSetupStatus();
+      return reply.send(successResponse(status, 'Setup status retrieved'));
+    } catch (err: any) {
+      return reply.status(500).send(errorResponse('SERVER_ERROR', err.message));
+    }
+  }
+
+  static async bootstrap(request: FastifyRequest, reply: FastifyReply) {
+    const { name, phone, phoneNumber, password } = (request.body as any) || {};
+    try {
+      const result = await AuthService.bootstrapAdmin(
+        {
+          name,
+          phoneNumber: phone || phoneNumber,
+          passwordPlaintext: password,
+        },
+        request.ip,
+        request.headers['user-agent']
+      );
+      return reply.status(201).send(successResponse(result, 'Administrator account created successfully'));
+    } catch (err: any) {
+      return reply.status(400).send(errorResponse('BAD_REQUEST', err.message));
+    }
+  }
 }
+

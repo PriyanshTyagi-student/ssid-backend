@@ -11,4 +11,8 @@ export declare const env: {
     RATE_LIMIT_AUTH_MAX: number;
     RATE_LIMIT_WINDOW_MS: number;
     LOG_LEVEL: "fatal" | "error" | "warn" | "info" | "debug" | "trace";
+    APK_STORAGE_DIR: string;
+    ANDROID_PACKAGE_NAME: string;
+    MAX_APK_SIZE_MB: number;
+    TAILSCALE_URL: string;
 };

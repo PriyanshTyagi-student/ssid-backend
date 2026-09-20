@@ -195,6 +195,30 @@ export async function runMigrations() {
 
     CREATE INDEX IF NOT EXISTS labor_class_code_idx ON labor_classifications (code);
     CREATE INDEX IF NOT EXISTS labor_class_is_system_idx ON labor_classifications (is_system);
+
+    -- App Releases Table
+    CREATE TABLE IF NOT EXISTS app_releases (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      version_name VARCHAR(50) NOT NULL,
+      version_code INTEGER NOT NULL,
+      package_name VARCHAR(255) NOT NULL,
+      filename VARCHAR(255) NOT NULL,
+      file_size BIGINT NOT NULL,
+      sha256 VARCHAR(64) NOT NULL,
+      release_notes TEXT,
+      mandatory BOOLEAN NOT NULL DEFAULT FALSE,
+      status VARCHAR(20) NOT NULL DEFAULT 'draft',
+      uploaded_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      published_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      uploaded_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+      published_at TIMESTAMP WITH TIME ZONE,
+      created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS app_releases_status_idx ON app_releases (status);
+    CREATE INDEX IF NOT EXISTS app_releases_version_code_idx ON app_releases (version_code);
+    CREATE INDEX IF NOT EXISTS app_releases_created_at_idx ON app_releases (created_at);
   `;
 
   try {
@@ -206,40 +230,7 @@ export async function runMigrations() {
       await db.execute(sql.raw(migrationSql));
     }
 
-    // Seed default system roles if not exist
-    const systemRolesSeed = `
-      INSERT INTO roles (name, slug, description, permissions, is_system)
-      VALUES 
-        ('Administrator', 'admin', 'Full system access, management, and audit visibility', '["reports.view","reports.create","reports.review","reports.approve","reports.reject","reports.delete","reports.export","projects.view","projects.manage","sites.view","sites.manage","users.view","users.manage","settings.view"]'::jsonb, true),
-        ('Project Manager', 'project_manager', 'Project oversight, report reviews, and team approvals', '["reports.view","reports.create","reports.review","reports.approve","reports.reject","reports.delete","reports.export","projects.view","projects.manage","sites.view","sites.manage","settings.view"]'::jsonb, true),
-        ('Site Engineer', 'site_engineer', 'Field data entry, site operations, and daily reporting', '["reports.view","reports.create","projects.view","sites.view","settings.view"]'::jsonb, true),
-        ('Site Supervisor', 'site_supervisor', 'Field supervision, labor attendance, and daily reporting', '["reports.view","reports.create","reports.approve","projects.view","sites.view","settings.view"]'::jsonb, true)
-      ON CONFLICT (slug) DO NOTHING;
-
-      INSERT INTO labor_classifications (code, name, description, is_system)
-      VALUES
-        ('skilled', 'Skilled Labor', 'Specialized and certified trades (masons, electricians, plumbers)', true),
-        ('unskilled', 'Unskilled Labor', 'General site labor, helpers, and manual support', true),
-        ('supervisory', 'Supervisory & Field Staff', 'Foremen, safety supervisors, and site leaders', true)
-      ON CONFLICT (code) DO NOTHING;
-
-      -- Sync any other custom classifications from existing labor_categories
-      INSERT INTO labor_classifications (code, name, description, is_system)
-      SELECT DISTINCT category_type, INITCAP(REPLACE(category_type, '_', ' ')), 'Imported category classification', false
-      FROM labor_categories
-      WHERE category_type NOT IN ('skilled', 'unskilled', 'supervisory')
-      ON CONFLICT (code) DO NOTHING;
-    `;
-
-    if (typeof client.exec === 'function') {
-      await client.exec(systemRolesSeed);
-    } else if (typeof client.query === 'function') {
-      await client.query(systemRolesSeed);
-    } else {
-      await db.execute(sql.raw(systemRolesSeed));
-    }
-
-    logger.info('[MIGRATION] All tables, indexes, constraints, and default roles/classifications verified successfully.');
+    logger.info('[MIGRATION] All tables, indexes, and constraints verified successfully.');
   } catch (err) {
     logger.error({ err }, '[MIGRATION] Migration execution failed');
     throw err;

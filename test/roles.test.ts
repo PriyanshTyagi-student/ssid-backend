@@ -119,13 +119,15 @@ describe('Roles and Classifications Management', () => {
     const adminRole = JSON.parse(listRes.body).data.find((r: any) => r.slug === 'admin');
     expect(adminRole).toBeDefined();
 
+    // The admin role currently has the admin user assigned, so it should return 409 ROLE_IN_USE
     const deleteRes = await app.inject({
       method: 'DELETE',
       url: `/api/v1/roles/${adminRole.id}`,
       headers: { Authorization: `Bearer ${adminToken}` },
     });
 
-    expect(deleteRes.statusCode).toBe(403);
+    expect(deleteRes.statusCode).toBe(409);
+    expect(JSON.parse(deleteRes.body).error.code).toBe('ROLE_IN_USE');
   });
 
   it('should create, update, and delete a custom labor classification', async () => {
@@ -169,13 +171,28 @@ describe('Roles and Classifications Management', () => {
     expect(deleteRes.statusCode).toBe(200);
   });
 
-  it('should protect system classifications from deletion', async () => {
+  it('should allow deletion of any classification including system ones', async () => {
+    // 1. Create a classification marked with isSystem=true (or standard)
+    const db = getDb();
+    const { laborClassifications } = await import('../src/database/schema/labor_classifications.js');
+    await db
+      .insert(laborClassifications)
+      .values({
+        name: 'System Test Classification',
+        code: 'system_test_class',
+        description: 'Test system classification deletion',
+        isSystem: true,
+      })
+      .onConflictDoNothing();
+
     const deleteRes = await app.inject({
       method: 'DELETE',
-      url: '/api/v1/labor-categories/classifications/skilled',
+      url: '/api/v1/labor-categories/classifications/system_test_class',
       headers: { Authorization: `Bearer ${adminToken}` },
     });
 
-    expect(deleteRes.statusCode).toBe(403);
+    expect(deleteRes.statusCode).toBe(200);
+    const body = JSON.parse(deleteRes.body);
+    expect(body.success).toBe(true);
   });
 });

@@ -4,7 +4,7 @@ import { projects } from '../../database/schema/projects.js';
 import { sites } from '../../database/schema/sites.js';
 import { userProjectAssignments, userSiteAssignments } from '../../database/schema/assignments.js';
 import { roles } from '../../database/schema/roles.js';
-import { eq, asc, inArray } from 'drizzle-orm';
+import { eq, asc, inArray, count } from 'drizzle-orm';
 import { verifyPassword, hashPassword } from '../../utils/password.js';
 import { generateToken } from '../../utils/jwt.js';
 import { recordAudit } from '../audit/service.js';
@@ -304,5 +304,110 @@ export class AuthService {
 
     // Always return success message to prevent user enumeration
     return 'Password reset instructions have been dispatched to the registered phone number.';
+  }
+
+  /**
+   * Check if first-run administrator setup is required.
+   */
+  static async getSetupStatus() {
+    const db = getDb();
+    const [res] = await db.select({ count: count() }).from(users);
+    const userCount = Number(res?.count ?? 0);
+    return {
+      isSetupRequired: userCount === 0,
+      totalUsers: userCount,
+    };
+  }
+
+  /**
+   * Provision the initial administrator account on a fresh database.
+   */
+  static async bootstrapAdmin(
+    data: { name: string; phoneNumber: string; passwordPlaintext: string },
+    ipAddress?: string,
+    userAgent?: string
+  ) {
+    const db = getDb();
+    const [res] = await db.select({ count: count() }).from(users);
+    const userCount = Number(res?.count ?? 0);
+
+    if (userCount > 0) {
+      throw new Error('Initial setup has already been completed. Please log in with existing administrator credentials.');
+    }
+
+    const { name, phoneNumber, passwordPlaintext } = data;
+    if (!name || name.trim().length < 2) {
+      throw new Error('Administrator name must be at least 2 characters.');
+    }
+    if (!phoneNumber || phoneNumber.trim().length < 10) {
+      throw new Error('Please provide a valid 10-digit phone number.');
+    }
+    if (!passwordPlaintext || passwordPlaintext.length < 6) {
+      throw new Error('Password must be at least 6 characters.');
+    }
+
+    // Normalize phone number
+    const digitsOnly = phoneNumber.replace(/\D/g, '');
+    const formattedPhone = digitsOnly.length === 10 ? `+91${digitsOnly}` : (phoneNumber.startsWith('+') ? phoneNumber : `+${phoneNumber}`);
+
+    // Ensure Admin role exists in roles table
+    const [existingAdminRole] = await db.select().from(roles).where(eq(roles.slug, UserRole.ADMIN)).limit(1);
+    if (!existingAdminRole) {
+      await db.insert(roles).values({
+        name: 'Administrator',
+        slug: UserRole.ADMIN,
+        description: 'Full system access, management, and audit visibility',
+        permissions: [
+          'reports.view', 'reports.create', 'reports.review', 'reports.approve', 'reports.reject',
+          'reports.delete', 'reports.export', 'projects.view', 'projects.manage', 'sites.view',
+          'sites.manage', 'users.view', 'users.manage', 'settings.view'
+        ],
+        isSystem: false,
+      });
+    }
+
+    const passwordHash = await hashPassword(passwordPlaintext);
+
+    const [newUser] = await db
+      .insert(users)
+      .values({
+        name: name.trim(),
+        phoneNumber: formattedPhone,
+        passwordHash,
+        role: UserRole.ADMIN,
+        status: UserStatus.ACTIVE,
+      })
+      .returning();
+
+    const permissions = await AuthService.getUserPermissions(UserRole.ADMIN);
+    const token = generateToken({
+      userId: newUser.id,
+      phone: newUser.phoneNumber,
+      role: newUser.role as UserRoleType,
+      name: newUser.name,
+    });
+
+    await recordAudit({
+      userId: newUser.id,
+      action: AuditAction.USER_CREATED,
+      entityType: 'user',
+      entityId: newUser.id,
+      metadata: { setup: 'bootstrap_initial_admin', name: newUser.name, phone: newUser.phoneNumber },
+      ipAddress,
+      userAgent,
+    });
+
+    return {
+      token,
+      user: {
+        id: newUser.id,
+        name: newUser.name,
+        phoneNumber: newUser.phoneNumber,
+        phone_number: newUser.phoneNumber,
+        role: newUser.role,
+        status: newUser.status,
+        permissions,
+      },
+    };
   }
 }

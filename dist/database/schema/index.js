@@ -14,6 +14,7 @@ export * from './audit.js';
 export * from './labor_categories.js';
 export * from './roles.js';
 export * from './labor_classifications.js';
+export * from './app_releases.js';
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
     projectAssignments: many(userProjectAssignments),

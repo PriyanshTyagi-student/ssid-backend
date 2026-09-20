@@ -210,13 +210,25 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
     '/:id',
     {
       schema: {
-        description: 'Delete user if no reports are authored by them (Admin only)',
+        description: 'Delete user account and related assignments (Admin only)',
         tags: ['Users'],
         security: [{ bearerAuth: [] }],
+        params: {
+          type: 'object',
+          required: ['id'],
+          properties: { id: { type: 'string', format: 'uuid' } },
+        },
+        querystring: {
+          type: 'object',
+          properties: {
+            cascade: { type: 'boolean' },
+          },
+        },
       },
     },
     async (request, reply) => {
       const { id } = request.params as { id: string };
+      const { cascade } = (request.query as { cascade?: boolean }) || {};
       const user = request.user!;
       if (user.role !== UserRole.ADMIN) {
         return reply.status(403).send(errorResponse('FORBIDDEN', 'Only administrators can delete users'));
@@ -238,25 +250,41 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
         .from(reports)
         .where(or(eq(reports.createdBy, id), eq(reports.reviewedBy, id)));
 
-      if (Number(linkedReports.count) > 0) {
-        return reply
-          .status(409)
-          .send(
-            errorResponse(
-              'CONFLICT',
-              `Cannot delete user "${existing.name}" because ${linkedReports.count} report(s) are linked to them. Please deactivate or suspend this user instead.`
-            )
-          );
+      const reportCount = Number(linkedReports.count);
+      if (reportCount > 0) {
+        if (!cascade) {
+          return reply
+            .status(409)
+            .send(
+              errorResponse(
+                'CONFLICT',
+                `Cannot delete user "${existing.name}" because ${reportCount} report(s) are linked to them. Pass cascade=true to delete the user and reassign report authorship to administrator.`
+              )
+            );
+        }
       }
 
-      await db.delete(users).where(eq(users.id, id));
+      await db.transaction(async (tx: any) => {
+        // If cascade, reassign any authored or reviewed reports to current admin
+        if (reportCount > 0) {
+          await tx.update(reports).set({ createdBy: user.id }).where(eq(reports.createdBy, id));
+          await tx.update(reports).set({ reviewedBy: user.id }).where(eq(reports.reviewedBy, id));
+        }
+
+        // Clear assignments
+        await tx.delete(userProjectAssignments).where(eq(userProjectAssignments.userId, id));
+        await tx.delete(userSiteAssignments).where(eq(userSiteAssignments.userId, id));
+
+        // Delete user
+        await tx.delete(users).where(eq(users.id, id));
+      });
 
       await recordAudit({
         userId: user.id,
         action: AuditAction.USER_DELETED,
         entityType: 'user',
         entityId: id,
-        metadata: { userName: existing.name, userPhone: existing.phoneNumber, role: existing.role },
+        metadata: { userName: existing.name, userPhone: existing.phoneNumber, role: existing.role, cascade: !!cascade },
         ipAddress: request.ip,
         userAgent: request.headers['user-agent'],
       });
@@ -528,3 +556,4 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
     }
   );
 };
+

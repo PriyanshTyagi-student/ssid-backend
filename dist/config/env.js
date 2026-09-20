@@ -14,6 +14,10 @@ const envSchema = z.object({
     RATE_LIMIT_AUTH_MAX: z.coerce.number().default(10),
     RATE_LIMIT_WINDOW_MS: z.coerce.number().default(60000),
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
+    APK_STORAGE_DIR: z.string().default('./data/apks'),
+    ANDROID_PACKAGE_NAME: z.string().default('com.ssid.ssid_app'),
+    MAX_APK_SIZE_MB: z.coerce.number().default(200),
+    TAILSCALE_URL: z.string().default('https://ptmm.tail05f2a8.ts.net'),
 });
 const parsedEnv = envSchema.safeParse(process.env);
 if (!parsedEnv.success) {

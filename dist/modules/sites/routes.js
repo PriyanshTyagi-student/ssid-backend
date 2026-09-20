@@ -3,7 +3,7 @@ import { authenticate } from '../../middleware/auth.js';
 import { getDb } from '../../database/connection.js';
 import { sites } from '../../database/schema/sites.js';
 import { projects } from '../../database/schema/projects.js';
-import { reports } from '../../database/schema/reports.js';
+import { reports, reportSections, reportEntries } from '../../database/schema/reports.js';
 import { userSiteAssignments } from '../../database/schema/assignments.js';
 import { eq, inArray, count, and } from 'drizzle-orm';
 import { successResponse, errorResponse } from '../../utils/response.js';
@@ -238,12 +238,24 @@ export const siteRoutes = async (fastify) => {
     // DELETE /api/v1/sites/:id (Admin or Project Manager)
     fastify.delete('/:id', {
         schema: {
-            description: 'Delete construction site if no reports are linked (Admin / PM only)',
+            description: 'Delete construction site (Admin / PM only)',
             tags: ['Sites'],
             security: [{ bearerAuth: [] }],
+            params: {
+                type: 'object',
+                required: ['id'],
+                properties: { id: { type: 'string', format: 'uuid' } },
+            },
+            querystring: {
+                type: 'object',
+                properties: {
+                    cascade: { type: 'boolean' },
+                },
+            },
         },
     }, async (request, reply) => {
         const { id } = request.params;
+        const { cascade } = request.query || {};
         const user = request.user;
         if (user.role !== UserRole.ADMIN && user.role !== UserRole.PROJECT_MANAGER) {
             return reply.status(403).send(errorResponse('FORBIDDEN', 'Insufficient permissions to delete sites'));
@@ -258,18 +270,38 @@ export const siteRoutes = async (fastify) => {
             .select({ count: count() })
             .from(reports)
             .where(eq(reports.siteId, id));
-        if (Number(linkedReports.count) > 0) {
-            return reply
-                .status(409)
-                .send(errorResponse('CONFLICT', `Cannot delete site "${existing.name}" because ${linkedReports.count} report(s) are linked to it. Please mark as inactive/completed instead.`));
+        const reportCount = Number(linkedReports.count);
+        if (reportCount > 0) {
+            if (!cascade) {
+                return reply
+                    .status(409)
+                    .send(errorResponse('CONFLICT', `Cannot delete site "${existing.name}" because ${reportCount} report(s) are linked to it. Pass cascade=true to force delete the site and its reports.`));
+            }
         }
-        await db.delete(sites).where(eq(sites.id, id));
+        await db.transaction(async (tx) => {
+            // Cascade delete reports if any
+            const siteReports = await tx.select({ id: reports.id }).from(reports).where(eq(reports.siteId, id));
+            const reportIds = siteReports.map((r) => r.id);
+            if (reportIds.length > 0) {
+                const sections = await tx.select({ id: reportSections.id }).from(reportSections).where(inArray(reportSections.reportId, reportIds));
+                const sectionIds = sections.map((s) => s.id);
+                if (sectionIds.length > 0) {
+                    await tx.delete(reportEntries).where(inArray(reportEntries.sectionId, sectionIds));
+                    await tx.delete(reportSections).where(inArray(reportSections.reportId, reportIds));
+                }
+                await tx.delete(reports).where(eq(reports.siteId, id));
+            }
+            // Delete site assignments
+            await tx.delete(userSiteAssignments).where(eq(userSiteAssignments.siteId, id));
+            // Delete site
+            await tx.delete(sites).where(eq(sites.id, id));
+        });
         await recordAudit({
             userId: user.id,
             action: AuditAction.SITE_DELETED,
             entityType: 'site',
             entityId: id,
-            metadata: { siteName: existing.name, projectId: existing.projectId },
+            metadata: { siteName: existing.name, projectId: existing.projectId, cascade: !!cascade, deletedReportsCount: reportCount },
             ipAddress: request.ip,
             userAgent: request.headers['user-agent'],
         });

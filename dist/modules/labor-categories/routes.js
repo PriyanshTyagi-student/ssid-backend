@@ -3,7 +3,6 @@ import { getDb } from '../../database/connection.js';
 import { laborCategories } from '../../database/schema/labor_categories.js';
 import { laborClassifications } from '../../database/schema/labor_classifications.js';
 import { users } from '../../database/schema/users.js';
-import { reportEntries } from '../../database/schema/reports.js';
 import { successResponse, errorResponse } from '../../utils/response.js';
 import { recordAudit } from '../audit/service.js';
 import { AuditAction, UserRole } from '../../config/constants.js';
@@ -191,9 +190,6 @@ export const laborCategoryRoutes = async (fastify) => {
         }
         // Handle code renaming if requested
         if (body.newCode !== undefined && body.newCode.trim().toLowerCase() !== code) {
-            if (existing.isSystem) {
-                return reply.status(400).send(errorResponse('CANNOT_MODIFY_SYSTEM_CLASSIFICATION', 'System classification codes cannot be altered'));
-            }
             const newCode = body.newCode.trim().toLowerCase();
             const [conflict] = await db
                 .select()
@@ -240,6 +236,12 @@ export const laborCategoryRoutes = async (fastify) => {
                 required: ['code'],
                 properties: { code: { type: 'string' } },
             },
+            querystring: {
+                type: 'object',
+                properties: {
+                    cascade: { type: 'boolean' },
+                },
+            },
         },
     }, async (request, reply) => {
         const user = request.user;
@@ -247,6 +249,7 @@ export const laborCategoryRoutes = async (fastify) => {
             return reply.status(403).send(errorResponse('FORBIDDEN', 'Only administrators can delete classifications'));
         }
         const { code } = request.params;
+        const { cascade } = request.query || {};
         const db = getDb();
         const [classification] = await db
             .select()
@@ -256,9 +259,6 @@ export const laborCategoryRoutes = async (fastify) => {
         if (!classification) {
             return reply.status(404).send(errorResponse('NOT_FOUND', `Classification "${code}" not found`));
         }
-        if (classification.isSystem) {
-            return reply.status(403).send(errorResponse('SYSTEM_CLASSIFICATION_PROTECTED', 'Default system classifications cannot be deleted'));
-        }
         // Check if categories are assigned to this classification
         const [categoryCount] = await db
             .select({ count: sql `count(*)::int` })
@@ -266,13 +266,19 @@ export const laborCategoryRoutes = async (fastify) => {
             .where(eq(laborCategories.categoryType, code));
         const count = Number(categoryCount?.count ?? 0);
         if (count > 0) {
-            return reply.status(409).send({
-                success: false,
-                error: {
-                    code: 'CLASSIFICATION_IN_USE',
-                    message: `Cannot delete classification "${classification.name}" because it contains ${count} labor categor${count > 1 ? 'ies' : 'y'}. Please reassign or delete these categories first.`,
-                },
-            });
+            if (cascade) {
+                // Cascade delete all child categories
+                await db.delete(laborCategories).where(eq(laborCategories.categoryType, code));
+            }
+            else {
+                return reply.status(409).send({
+                    success: false,
+                    error: {
+                        code: 'CLASSIFICATION_IN_USE',
+                        message: `Cannot delete classification "${classification.name}" because it contains ${count} labor categor${count > 1 ? 'ies' : 'y'}. Pass cascade=true to delete both classification and its categories.`,
+                    },
+                });
+            }
         }
         await db.delete(laborClassifications).where(eq(laborClassifications.id, classification.id));
         await recordAudit({
@@ -280,7 +286,7 @@ export const laborCategoryRoutes = async (fastify) => {
             action: AuditAction.LABOR_CLASSIFICATION_DELETED,
             entityType: 'labor_classification',
             entityId: classification.id,
-            metadata: { deletedName: classification.name, deletedCode: classification.code },
+            metadata: { deletedName: classification.name, deletedCode: classification.code, cascadedCategoriesCount: count },
             ipAddress: request.ip,
             userAgent: request.headers['user-agent'],
         });
@@ -596,21 +602,8 @@ export const laborCategoryRoutes = async (fastify) => {
         if (!category) {
             return reply.status(404).send(errorResponse('NOT_FOUND', 'Labor category not found'));
         }
-        // Check if referenced in historical report_entries
-        const [usageCheck] = await db
-            .select({ id: reportEntries.id })
-            .from(reportEntries)
-            .where(sql `${reportEntries.entryData}->>'categoryId' = ${id} OR ${reportEntries.entryData}->>'classificationId' = ${id} OR ${reportEntries.entryData}->>'trade' = ${category.name} OR ${reportEntries.entryData}->>'classificationNameSnapshot' = ${category.name}`)
-            .limit(1);
-        if (usageCheck) {
-            return reply.status(409).send({
-                success: false,
-                error: {
-                    code: 'CATEGORY_IN_USE',
-                    message: 'This classification is referenced by existing reports. Deactivate it instead of deleting it to preserve historical integrity.',
-                },
-            });
-        }
+        // Historical report_entries preserve snapshots (trade, classificationNameSnapshot, totalWorkers, presentWorkers, absentWorkers)
+        // so categories can be deleted freely without corrupting historical report data.
         await db.delete(laborCategories).where(eq(laborCategories.id, id));
         await recordAudit({
             userId: user.id,

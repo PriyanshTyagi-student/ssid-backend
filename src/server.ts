@@ -11,10 +11,8 @@ async function startServer() {
     await initDatabase();
     await runMigrations();
 
-    if (env.NODE_ENV === 'development') {
-      logger.info('[STARTUP] Seeding development database...');
-      await seedDatabase();
-    }
+    // Note: Automatic seeding disabled. Application starts with zero demo data.
+    // Database can be manually seeded with npm run db:seed if needed for tests.
 
     const app = await buildApp();
 

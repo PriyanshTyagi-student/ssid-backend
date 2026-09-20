@@ -214,3 +214,4 @@ export const reportRoutes: FastifyPluginAsync = async (fastify) => {
     ReportController.reject
   );
 };
+

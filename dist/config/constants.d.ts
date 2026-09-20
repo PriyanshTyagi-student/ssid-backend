@@ -78,6 +78,11 @@ export declare const AuditAction: {
     readonly LABOR_CLASSIFICATION_UPDATED: "LABOR_CLASSIFICATION_UPDATED";
     readonly LABOR_CLASSIFICATION_DELETED: "LABOR_CLASSIFICATION_DELETED";
     readonly EXCEL_EXPORT: "EXCEL_EXPORT";
+    readonly APP_UPDATE_UPLOADED: "APP_UPDATE_UPLOADED";
+    readonly APP_UPDATE_PUBLISHED: "APP_UPDATE_PUBLISHED";
+    readonly APP_UPDATE_ARCHIVED: "APP_UPDATE_ARCHIVED";
+    readonly APP_UPDATE_DELETED: "APP_UPDATE_DELETED";
+    readonly APP_UPDATE_DOWNLOADED: "APP_UPDATE_DOWNLOADED";
 };
 export type AuditActionType = (typeof AuditAction)[keyof typeof AuditAction];
 /**

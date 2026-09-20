@@ -4,6 +4,40 @@ import { authenticate } from '../../middleware/auth.js';
 import { env } from '../../config/env.js';
 
 export const authRoutes: FastifyPluginAsync = async (fastify) => {
+  // Check if first-run administrator setup is required
+  fastify.get(
+    '/setup-status',
+    {
+      schema: {
+        description: 'Check if first-run administrator bootstrap is required',
+        tags: ['Authentication'],
+      },
+    },
+    AuthController.setupStatus
+  );
+
+  // Bootstrap initial administrator account (only allowed when 0 users exist)
+  fastify.post(
+    '/bootstrap',
+    {
+      schema: {
+        description: 'First-run bootstrap: create initial administrator account',
+        tags: ['Authentication'],
+        body: {
+          type: 'object',
+          required: ['name', 'password'],
+          properties: {
+            name: { type: 'string', minLength: 2 },
+            phone: { type: 'string' },
+            phoneNumber: { type: 'string' },
+            password: { type: 'string', minLength: 6 },
+          },
+        },
+      },
+    },
+    AuthController.bootstrap
+  );
+
   // Rate-limited login endpoint
   fastify.post(
     '/login',

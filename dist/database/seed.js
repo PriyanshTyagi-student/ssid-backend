@@ -4,11 +4,10 @@ import { users } from './schema/users.js';
 import { projects } from './schema/projects.js';
 import { sites } from './schema/sites.js';
 import { userProjectAssignments, userSiteAssignments } from './schema/assignments.js';
-import { laborCategories } from './schema/labor_categories.js';
 import { hashPassword } from '../utils/password.js';
-import { UserRole, UserStatus, ProjectStatus, SiteStatus, LaborCategoryType } from '../config/constants.js';
+import { UserRole, UserStatus, ProjectStatus, SiteStatus } from '../config/constants.js';
 import { logger } from '../utils/logger.js';
-import { eq, and } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 export async function seedDatabase() {
     await runMigrations();
     const db = getDb();
@@ -134,39 +133,68 @@ export async function seedDatabase() {
     else {
         logger.info('[SEED] Projects and Sites already seeded, skipping');
     }
-    // 3. Seed Standard Labor Categories (Idempotent)
-    const defaultCategories = [
-        // Skilled
-        { name: 'Mason', categoryType: LaborCategoryType.SKILLED, orderIndex: 1 },
-        { name: 'Carpenter / Shuttering', categoryType: LaborCategoryType.SKILLED, orderIndex: 2 },
-        { name: 'Bar Bender / Steel Fixer', categoryType: LaborCategoryType.SKILLED, orderIndex: 3 },
-        { name: 'Electrician', categoryType: LaborCategoryType.SKILLED, orderIndex: 4 },
-        { name: 'Plumber', categoryType: LaborCategoryType.SKILLED, orderIndex: 5 },
-        { name: 'Welder', categoryType: LaborCategoryType.SKILLED, orderIndex: 6 },
-        // Unskilled
-        { name: 'General Helper (Male)', categoryType: LaborCategoryType.UNSKILLED, orderIndex: 1 },
-        { name: 'General Helper (Female)', categoryType: LaborCategoryType.UNSKILLED, orderIndex: 2 },
-        { name: 'Beldar / Earthworker', categoryType: LaborCategoryType.UNSKILLED, orderIndex: 3 },
-        { name: 'Concrete Porter', categoryType: LaborCategoryType.UNSKILLED, orderIndex: 4 },
-        // Supervisory
-        { name: 'Site Supervisor', categoryType: LaborCategoryType.SUPERVISORY, orderIndex: 1 },
-        { name: 'Safety Officer / Marshal', categoryType: LaborCategoryType.SUPERVISORY, orderIndex: 2 },
-        { name: 'Quality Engineer', categoryType: LaborCategoryType.SUPERVISORY, orderIndex: 3 },
+    // 3. Seed Core System Roles (Idempotent for test & environment setups)
+    const { roles } = await import('./schema/roles.js');
+    const defaultRoles = [
+        {
+            name: 'System Administrator',
+            slug: 'admin',
+            description: 'Full system and administrative access',
+            permissions: [
+                'reports.view', 'reports.create', 'reports.review', 'reports.approve', 'reports.reject', 'reports.delete', 'reports.export',
+                'projects.view', 'projects.manage',
+                'sites.view', 'sites.manage',
+                'users.view', 'users.manage',
+                'labor_categories.view', 'labor_categories.manage',
+                'system.audit', 'system.roles',
+            ],
+            isSystem: true,
+        },
+        {
+            name: 'Project Manager',
+            slug: 'project_manager',
+            description: 'Project governance, report approval, and site management',
+            permissions: [
+                'reports.view', 'reports.review', 'reports.approve', 'reports.reject', 'reports.export',
+                'projects.view', 'projects.manage',
+                'sites.view', 'sites.manage',
+                'users.view',
+                'labor_categories.view', 'labor_categories.manage',
+            ],
+            isSystem: true,
+        },
+        {
+            name: 'Site Engineer',
+            slug: 'site_engineer',
+            description: 'Daily site reporting and logging',
+            permissions: [
+                'reports.view', 'reports.create',
+                'projects.view',
+                'sites.view',
+                'labor_categories.view',
+            ],
+            isSystem: true,
+        },
+        {
+            name: 'Site Supervisor',
+            slug: 'site_supervisor',
+            description: 'On-site monitoring and field report drafting',
+            permissions: [
+                'reports.view', 'reports.create',
+                'sites.view',
+            ],
+            isSystem: true,
+        },
     ];
-    for (const cat of defaultCategories) {
-        const [existing] = await db
+    for (const r of defaultRoles) {
+        const [existingRole] = await db
             .select()
-            .from(laborCategories)
-            .where(and(eq(laborCategories.categoryType, cat.categoryType), eq(laborCategories.name, cat.name)))
+            .from(roles)
+            .where(eq(roles.slug, r.slug))
             .limit(1);
-        if (!existing) {
-            await db.insert(laborCategories).values({
-                name: cat.name,
-                categoryType: cat.categoryType,
-                orderIndex: cat.orderIndex,
-                isActive: true,
-            });
-            logger.info(`[SEED] Created labor category: [${cat.categoryType}] ${cat.name}`);
+        if (!existingRole) {
+            await db.insert(roles).values(r);
+            logger.info(`[SEED] Created system role: ${r.name} (${r.slug})`);
         }
     }
     logger.info('[SEED] Database seeding complete.');

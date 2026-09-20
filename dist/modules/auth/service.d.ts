@@ -51,4 +51,30 @@ export declare class AuthService {
      * Request password reset instructions.
      */
     static forgotPassword(phone: string, ipAddress?: string, userAgent?: string): Promise<string>;
+    /**
+     * Check if first-run administrator setup is required.
+     */
+    static getSetupStatus(): Promise<{
+        isSetupRequired: boolean;
+        totalUsers: number;
+    }>;
+    /**
+     * Provision the initial administrator account on a fresh database.
+     */
+    static bootstrapAdmin(data: {
+        name: string;
+        phoneNumber: string;
+        passwordPlaintext: string;
+    }, ipAddress?: string, userAgent?: string): Promise<{
+        token: string;
+        user: {
+            id: any;
+            name: any;
+            phoneNumber: any;
+            phone_number: any;
+            role: any;
+            status: any;
+            permissions: string[];
+        };
+    }>;
 }

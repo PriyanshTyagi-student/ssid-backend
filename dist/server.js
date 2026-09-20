@@ -3,16 +3,13 @@ import { env } from './config/env.js';
 import { logger } from './utils/logger.js';
 import { initDatabase, closeDatabase } from './database/connection.js';
 import { runMigrations } from './database/migrate.js';
-import { seedDatabase } from './database/seed.js';
 async function startServer() {
     try {
         logger.info('[STARTUP] Initializing database and running migrations...');
         await initDatabase();
         await runMigrations();
-        if (env.NODE_ENV === 'development') {
-            logger.info('[STARTUP] Seeding development database...');
-            await seedDatabase();
-        }
+        // Note: Automatic seeding disabled. Application starts with zero demo data.
+        // Database can be manually seeded with npm run db:seed if needed for tests.
         const app = await buildApp();
         await app.listen({
             port: env.PORT,

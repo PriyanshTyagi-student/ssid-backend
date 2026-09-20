@@ -71,5 +71,28 @@ export class AuthController {
             return reply.status(400).send(errorResponse('BAD_REQUEST', err.message));
         }
     }
+    static async setupStatus(request, reply) {
+        try {
+            const status = await AuthService.getSetupStatus();
+            return reply.send(successResponse(status, 'Setup status retrieved'));
+        }
+        catch (err) {
+            return reply.status(500).send(errorResponse('SERVER_ERROR', err.message));
+        }
+    }
+    static async bootstrap(request, reply) {
+        const { name, phone, phoneNumber, password } = request.body || {};
+        try {
+            const result = await AuthService.bootstrapAdmin({
+                name,
+                phoneNumber: phone || phoneNumber,
+                passwordPlaintext: password,
+            }, request.ip, request.headers['user-agent']);
+            return reply.status(201).send(successResponse(result, 'Administrator account created successfully'));
+        }
+        catch (err) {
+            return reply.status(400).send(errorResponse('BAD_REQUEST', err.message));
+        }
+    }
 }
 //# sourceMappingURL=controller.js.map

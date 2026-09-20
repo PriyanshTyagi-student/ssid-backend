@@ -5,4 +5,6 @@ export declare class AuthController {
     static me(request: FastifyRequest, reply: FastifyReply): Promise<never>;
     static forgotPassword(request: FastifyRequest, reply: FastifyReply): Promise<never>;
     static changePassword(request: FastifyRequest, reply: FastifyReply): Promise<never>;
+    static setupStatus(request: FastifyRequest, reply: FastifyReply): Promise<never>;
+    static bootstrap(request: FastifyRequest, reply: FastifyReply): Promise<never>;
 }

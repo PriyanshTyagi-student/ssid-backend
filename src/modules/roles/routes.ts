@@ -270,12 +270,8 @@ export const roleRoutes: FastifyPluginAsync = async (fastify) => {
         updateData.permissions = body.permissions;
       }
 
-      // Slug can only be changed on non-system roles
+      // Slug can be modified
       if (body.slug !== undefined && body.slug.trim() !== existing.slug) {
-        if (existing.isSystem) {
-          return reply.status(400).send(errorResponse('CANNOT_MODIFY_SYSTEM_ROLE', 'Cannot alter the identifier of system roles'));
-        }
-
         const newSlug = body.slug.trim().toLowerCase();
         const [conflict] = await db.select().from(roles).where(eq(roles.slug, newSlug)).limit(1);
         if (conflict) {
@@ -306,7 +302,7 @@ export const roleRoutes: FastifyPluginAsync = async (fastify) => {
     }
   );
 
-  // 6. DELETE /api/v1/roles/:id - Delete custom role (Admin only)
+  // 6. DELETE /api/v1/roles/:id - Delete role (Admin only)
   fastify.delete(
     '/:id',
     {
@@ -329,12 +325,7 @@ export const roleRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.status(404).send(errorResponse('NOT_FOUND', 'Role not found'));
       }
 
-      // 1. Cannot delete system roles
-      if (role.isSystem) {
-        return reply.status(403).send(errorResponse('SYSTEM_ROLE_PROTECTED', 'Default system roles cannot be deleted'));
-      }
-
-      // 2. Check if users are assigned
+      // Check if users are currently assigned to this role
       const [userCountResult] = await db
         .select({ count: sql<number>`count(*)::int` })
         .from(users)

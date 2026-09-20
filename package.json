@@ -10,15 +10,18 @@
     "start": "node dist/server.js",
     "db:migrate": "tsx src/database/migrate.ts",
     "db:seed": "tsx src/database/seed.ts",
+    "db:reset": "tsx src/database/reset.ts",
     "test": "vitest run --no-file-parallelism"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.2.14",
     "@fastify/cors": "^10.0.1",
     "@fastify/helmet": "^13.0.1",
+    "@fastify/multipart": "^10.1.1",
     "@fastify/rate-limit": "^10.2.1",
     "@fastify/swagger": "^9.4.0",
     "@fastify/swagger-ui": "^5.2.0",
+    "adbkit-apkreader": "^3.2.0",
     "argon2": "^0.41.1",
     "dotenv": "^16.4.7",
     "drizzle-orm": "^0.39.3",
