@@ -64,6 +64,14 @@ export const reportRoutes = async (fastify) => {
             security: [{ bearerAuth: [] }],
         },
     }, ReportController.update);
+    // DELETE /api/v1/reports/:id
+    fastify.delete('/:id', {
+        schema: {
+            description: 'Delete report and its sections/entries (Admin, or creator if draft/rejected)',
+            tags: ['Reports'],
+            security: [{ bearerAuth: [] }],
+        },
+    }, ReportController.delete);
     // POST /api/v1/reports
     fastify.post('/', {
         schema: {

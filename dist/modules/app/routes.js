@@ -31,7 +31,7 @@ export const appVersionRoutes = async (fastify) => {
         const versionMetadata = {
             version: '1.0.0',
             versionCode: 1,
-            downloadUrl: 'http://10.216.201.229:3000/downloads/app-release.apk',
+            downloadUrl: 'https://ptmm.tail05f2a8.ts.net/downloads/app-release.apk',
             checksum: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
             mandatory: false,
             releaseNotes: [

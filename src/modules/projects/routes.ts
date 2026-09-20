@@ -4,10 +4,12 @@ import { authenticate } from '../../middleware/auth.js';
 import { getDb } from '../../database/connection.js';
 import { projects } from '../../database/schema/projects.js';
 import { sites } from '../../database/schema/sites.js';
+import { reports } from '../../database/schema/reports.js';
 import { userProjectAssignments } from '../../database/schema/assignments.js';
 import { eq, inArray, count } from 'drizzle-orm';
 import { successResponse, errorResponse } from '../../utils/response.js';
-import { UserRole } from '../../config/constants.js';
+import { recordAudit } from '../audit/service.js';
+import { AuditAction, UserRole } from '../../config/constants.js';
 
 const listQuerySchema = z.object({
   page: z.coerce.number().min(1).default(1),
@@ -248,6 +250,62 @@ export const projectRoutes: FastifyPluginAsync = async (fastify) => {
         .returning();
 
       return reply.send(successResponse(updated, 'Project updated successfully'));
+    }
+  );
+
+  // DELETE /api/v1/projects/:id (Admin only)
+  fastify.delete(
+    '/:id',
+    {
+      schema: {
+        description: 'Delete project and related site records if no reports exist (Admin only)',
+        tags: ['Projects'],
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const user = request.user!;
+      if (user.role !== UserRole.ADMIN) {
+        return reply.status(403).send(errorResponse('FORBIDDEN', 'Only administrators can delete projects'));
+      }
+
+      const db = getDb();
+      const [existing] = await db.select().from(projects).where(eq(projects.id, id)).limit(1);
+      if (!existing) {
+        return reply.status(404).send(errorResponse('NOT_FOUND', 'Project not found'));
+      }
+
+      // Check if reports exist for this project
+      const [linkedReports] = await db
+        .select({ count: count() })
+        .from(reports)
+        .where(eq(reports.projectId, id));
+
+      if (Number(linkedReports.count) > 0) {
+        return reply
+          .status(409)
+          .send(
+            errorResponse(
+              'CONFLICT',
+              `Cannot delete project "${existing.name}" because ${linkedReports.count} report(s) are associated with it. Please archive the project instead.`
+            )
+          );
+      }
+
+      await db.delete(projects).where(eq(projects.id, id));
+
+      await recordAudit({
+        userId: user.id,
+        action: AuditAction.PROJECT_DELETED,
+        entityType: 'project',
+        entityId: id,
+        metadata: { projectName: existing.name, projectCode: existing.projectCode },
+        ipAddress: request.ip,
+        userAgent: request.headers['user-agent'],
+      });
+
+      return reply.send(successResponse({ id, deleted: true }, 'Project deleted successfully'));
     }
   );
 };

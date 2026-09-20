@@ -729,5 +729,53 @@ export class ReportService {
 
     return await ReportService.getReportById(reportId, { id: userId, role: userRole });
   }
+
+  static async deleteReport(
+    reportId: string,
+    userId: string,
+    userRole: string,
+    ipAddress?: string,
+    userAgent?: string
+  ) {
+    const db = getDb();
+    const [report] = await db.select().from(reports).where(eq(reports.id, reportId)).limit(1);
+    if (!report) {
+      throw new Error('Report not found');
+    }
+
+    if (userRole !== UserRole.ADMIN && userRole !== UserRole.PROJECT_MANAGER) {
+      if (report.createdBy !== userId) {
+        throw new Error('You do not have permission to delete this report');
+      }
+      if (report.status !== ReportStatus.DRAFT && report.status !== ReportStatus.REJECTED) {
+        throw new Error('Only draft or rejected reports can be deleted');
+      }
+    }
+
+    // Delete sections and entries in case cascade FK is not strictly enforced by sqlite/pglite
+    const sections = await db
+      .select({ id: reportSections.id })
+      .from(reportSections)
+      .where(eq(reportSections.reportId, reportId));
+    const sectionIds = sections.map((s: any) => s.id);
+    if (sectionIds.length > 0) {
+      await db.delete(reportEntries).where(inArray(reportEntries.sectionId, sectionIds));
+      await db.delete(reportSections).where(eq(reportSections.reportId, reportId));
+    }
+
+    await db.delete(reports).where(eq(reports.id, reportId));
+
+    await recordAudit({
+      userId,
+      action: AuditAction.REPORT_DELETED,
+      entityType: 'report',
+      entityId: reportId,
+      metadata: { reportNumber: report.reportNumber, reportType: report.reportType, status: report.status },
+      ipAddress,
+      userAgent,
+    });
+
+    return { id: reportId, deleted: true };
+  }
 }
 

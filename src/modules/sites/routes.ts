@@ -4,10 +4,12 @@ import { authenticate } from '../../middleware/auth.js';
 import { getDb } from '../../database/connection.js';
 import { sites } from '../../database/schema/sites.js';
 import { projects } from '../../database/schema/projects.js';
+import { reports } from '../../database/schema/reports.js';
 import { userSiteAssignments } from '../../database/schema/assignments.js';
 import { eq, inArray, count, and } from 'drizzle-orm';
 import { successResponse, errorResponse } from '../../utils/response.js';
-import { UserRole } from '../../config/constants.js';
+import { recordAudit } from '../audit/service.js';
+import { AuditAction, UserRole } from '../../config/constants.js';
 
 const siteListQuerySchema = z.object({
   projectId: z.string().uuid().optional(),
@@ -280,6 +282,62 @@ export const siteRoutes: FastifyPluginAsync = async (fastify) => {
         .returning();
 
       return reply.send(successResponse(updated, 'Site updated successfully'));
+    }
+  );
+
+  // DELETE /api/v1/sites/:id (Admin or Project Manager)
+  fastify.delete(
+    '/:id',
+    {
+      schema: {
+        description: 'Delete construction site if no reports are linked (Admin / PM only)',
+        tags: ['Sites'],
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const user = request.user!;
+      if (user.role !== UserRole.ADMIN && user.role !== UserRole.PROJECT_MANAGER) {
+        return reply.status(403).send(errorResponse('FORBIDDEN', 'Insufficient permissions to delete sites'));
+      }
+
+      const db = getDb();
+      const [existing] = await db.select().from(sites).where(eq(sites.id, id)).limit(1);
+      if (!existing) {
+        return reply.status(404).send(errorResponse('NOT_FOUND', 'Site not found'));
+      }
+
+      // Check if reports exist for this site
+      const [linkedReports] = await db
+        .select({ count: count() })
+        .from(reports)
+        .where(eq(reports.siteId, id));
+
+      if (Number(linkedReports.count) > 0) {
+        return reply
+          .status(409)
+          .send(
+            errorResponse(
+              'CONFLICT',
+              `Cannot delete site "${existing.name}" because ${linkedReports.count} report(s) are linked to it. Please mark as inactive/completed instead.`
+            )
+          );
+      }
+
+      await db.delete(sites).where(eq(sites.id, id));
+
+      await recordAudit({
+        userId: user.id,
+        action: AuditAction.SITE_DELETED,
+        entityType: 'site',
+        entityId: id,
+        metadata: { siteName: existing.name, projectId: existing.projectId },
+        ipAddress: request.ip,
+        userAgent: request.headers['user-agent'],
+      });
+
+      return reply.send(successResponse({ id, deleted: true }, 'Site deleted successfully'));
     }
   );
 };

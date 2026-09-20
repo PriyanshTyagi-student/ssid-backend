@@ -76,4 +76,8 @@ export declare class ReportService {
      * Update report sections/entries if in DRAFT or REJECTED status.
      */
     static updateReport(reportId: string, input: any, userId: string, userRole: string, ipAddress?: string, userAgent?: string): Promise<any>;
+    static deleteReport(reportId: string, userId: string, userRole: string, ipAddress?: string, userAgent?: string): Promise<{
+        id: string;
+        deleted: boolean;
+    }>;
 }

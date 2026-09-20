@@ -6,7 +6,8 @@ import { users } from '../../database/schema/users.js';
 import { userProjectAssignments, userSiteAssignments } from '../../database/schema/assignments.js';
 import { projects } from '../../database/schema/projects.js';
 import { sites } from '../../database/schema/sites.js';
-import { eq, count, and } from 'drizzle-orm';
+import { eq, count, and, or } from 'drizzle-orm';
+import { reports } from '../../database/schema/reports.js';
 import { successResponse, errorResponse } from '../../utils/response.js';
 import { recordAudit } from '../audit/service.js';
 import { AuditAction, UserRole, UserStatus } from '../../config/constants.js';
@@ -201,6 +202,66 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
         });
 
       return reply.send(successResponse(updated, 'User updated successfully'));
+    }
+  );
+
+  // DELETE /api/v1/users/:id (Admin only)
+  fastify.delete(
+    '/:id',
+    {
+      schema: {
+        description: 'Delete user if no reports are authored by them (Admin only)',
+        tags: ['Users'],
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const user = request.user!;
+      if (user.role !== UserRole.ADMIN) {
+        return reply.status(403).send(errorResponse('FORBIDDEN', 'Only administrators can delete users'));
+      }
+
+      if (user.id === id) {
+        return reply.status(400).send(errorResponse('BAD_REQUEST', 'You cannot delete your own account'));
+      }
+
+      const db = getDb();
+      const [existing] = await db.select().from(users).where(eq(users.id, id)).limit(1);
+      if (!existing) {
+        return reply.status(404).send(errorResponse('NOT_FOUND', 'User not found'));
+      }
+
+      // Check if reports exist authored or reviewed by this user
+      const [linkedReports] = await db
+        .select({ count: count() })
+        .from(reports)
+        .where(or(eq(reports.createdBy, id), eq(reports.reviewedBy, id)));
+
+      if (Number(linkedReports.count) > 0) {
+        return reply
+          .status(409)
+          .send(
+            errorResponse(
+              'CONFLICT',
+              `Cannot delete user "${existing.name}" because ${linkedReports.count} report(s) are linked to them. Please deactivate or suspend this user instead.`
+            )
+          );
+      }
+
+      await db.delete(users).where(eq(users.id, id));
+
+      await recordAudit({
+        userId: user.id,
+        action: AuditAction.USER_DELETED,
+        entityType: 'user',
+        entityId: id,
+        metadata: { userName: existing.name, userPhone: existing.phoneNumber, role: existing.role },
+        ipAddress: request.ip,
+        userAgent: request.headers['user-agent'],
+      });
+
+      return reply.send(successResponse({ id, deleted: true }, 'User deleted successfully'));
     }
   );
 

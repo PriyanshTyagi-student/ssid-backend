@@ -148,5 +148,24 @@ export class ReportController {
       return reply.status(400).send(errorResponse('UPDATE_FAILED', err.message));
     }
   }
+
+  static async delete(request: FastifyRequest, reply: FastifyReply) {
+    const { id } = request.params as { id: string };
+    try {
+      const result = await ReportService.deleteReport(
+        id,
+        request.user!.id,
+        request.user!.role,
+        request.ip,
+        request.headers['user-agent']
+      );
+      return reply.send(successResponse(result, 'Report deleted successfully'));
+    } catch (err: any) {
+      if (err.message === 'Report not found') {
+        return reply.status(404).send(errorResponse('NOT_FOUND', err.message));
+      }
+      return reply.status(403).send(errorResponse('FORBIDDEN', err.message));
+    }
+  }
 }
 

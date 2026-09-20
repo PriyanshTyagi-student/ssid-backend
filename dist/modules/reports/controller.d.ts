@@ -11,4 +11,5 @@ export declare class ReportController {
     static export(request: FastifyRequest, reply: FastifyReply): Promise<never>;
     static todaySummary(request: FastifyRequest, reply: FastifyReply): Promise<never>;
     static update(request: FastifyRequest, reply: FastifyReply): Promise<never>;
+    static delete(request: FastifyRequest, reply: FastifyReply): Promise<never>;
 }
