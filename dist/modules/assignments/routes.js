@@ -97,7 +97,7 @@ export const assignmentRoutes = async (fastify) => {
             return reply.status(403).send(errorResponse('FORBIDDEN', 'Insufficient permissions'));
         }
         const db = getDb();
-        // Fetch all users eligible for field assignments: site_engineer and site_supervisor (or all field roles)
+        // Fetch all users eligible for assignments (including custom roles and field staff)
         const fieldUsers = await db
             .select({
             id: users.id,
@@ -108,11 +108,6 @@ export const assignmentRoutes = async (fastify) => {
             lastLoginAt: users.lastLoginAt,
         })
             .from(users)
-            .where(inArray(users.role, [
-            UserRole.SITE_ENGINEER,
-            UserRole.SITE_SUPERVISOR,
-            UserRole.PROJECT_MANAGER,
-        ]))
             .orderBy(asc(users.name));
         // Fetch assignments for all users
         const allProjectAssignments = await db
@@ -246,16 +241,10 @@ export const assignmentRoutes = async (fastify) => {
         const { userId } = request.params;
         const body = request.body || {};
         const db = getDb();
-        // 1. Validate user exists and role is eligible
+        // 1. Validate user exists
         const [targetUser] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
         if (!targetUser) {
             return reply.status(404).send(errorResponse('NOT_FOUND', 'User not found'));
-        }
-        const allowedRoles = [UserRole.SITE_ENGINEER, UserRole.SITE_SUPERVISOR, UserRole.PROJECT_MANAGER];
-        if (!allowedRoles.includes(targetUser.role)) {
-            return reply
-                .status(400)
-                .send(errorResponse('INVALID_ROLE', `Assignments can only be made to field roles (${allowedRoles.join(', ')})`));
         }
         const projectIds = Array.from(new Set(body.projectIds || []));
         const siteIds = Array.from(new Set(body.siteIds || []));
