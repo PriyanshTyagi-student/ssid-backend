@@ -64,6 +64,7 @@ export declare class ReportService {
      * Export reports as CSV data.
      */
     static exportReports(query: ListReportsQuery, user: any, ipAddress?: string, userAgent?: string): Promise<{
+        csv: string;
         csvData: string;
         filename: string;
         totalRecords: any;

@@ -1,4 +1,5 @@
 import { pgTable, uuid, varchar, integer, boolean, timestamp, uniqueIndex, index } from 'drizzle-orm/pg-core';
+import { users } from './users.js';
 
 export const laborCategories = pgTable(
   'labor_categories',
@@ -8,6 +9,8 @@ export const laborCategories = pgTable(
     categoryType: varchar('category_type', { length: 50 }).notNull(), // 'skilled', 'unskilled', 'supervisory'
     orderIndex: integer('order_index').notNull().default(0),
     isActive: boolean('is_active').notNull().default(true),
+    createdBy: uuid('created_by').references(() => users.id),
+    updatedBy: uuid('updated_by').references(() => users.id),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

@@ -10,6 +10,51 @@ import { recordAudit } from '../audit/service.js';
 import { AuditAction, ReportStatus, UserRole, type ReportTypeType } from '../../config/constants.js';
 import type { CreateReportInput, ListReportsQuery } from './schema.js';
 
+function validateAndNormalizeSections(sections: any[], reportType?: string) {
+  if (!sections || !Array.isArray(sections)) return;
+
+  for (const sec of sections) {
+    if (!sec.entries || !Array.isArray(sec.entries)) continue;
+    for (const entry of sec.entries) {
+      const data = entry.entryData;
+      if (!data) continue;
+
+      const isLaborEntry =
+        reportType === 'labor' ||
+        (sec.sectionType && (sec.sectionType.includes('labor') || sec.sectionType.includes('supervisory'))) ||
+        data.totalWorkers !== undefined ||
+        data.presentWorkers !== undefined ||
+        data.absentWorkers !== undefined;
+
+      if (isLaborEntry && (data.totalWorkers !== undefined || data.count !== undefined || data.presentWorkers !== undefined || data.absentWorkers !== undefined)) {
+        const total = Number(data.totalWorkers ?? data.count ?? 0);
+        const present = Number(data.presentWorkers ?? (data.absentWorkers !== undefined ? total - Number(data.absentWorkers) : total));
+        const absent = Number(data.absentWorkers ?? (total - present));
+
+        if (isNaN(total) || isNaN(present) || isNaN(absent)) {
+          throw new Error('Labor attendance counts must be valid numbers');
+        }
+        if (total < 0 || present < 0 || absent < 0) {
+          throw new Error('Labor attendance numbers cannot be negative');
+        }
+        if (present + absent !== total) {
+          const tradeName = data.classificationNameSnapshot || data.trade || data.name || 'classification';
+          throw new Error(`Labor attendance mismatch for "${tradeName}": Present (${present}) + Absent (${absent}) must equal Total (${total})`);
+        }
+
+        data.totalWorkers = total;
+        data.presentWorkers = present;
+        data.absentWorkers = absent;
+        data.count = total;
+        data.workingHours = Number(data.workingHours ?? data.standardHours ?? 8);
+        data.overtimeHours = Number(data.overtimeHours ?? 0);
+        data.remarks = data.remarks ? String(data.remarks).trim() : '';
+        data.classificationNameSnapshot = data.classificationNameSnapshot || data.trade || data.name || 'General';
+      }
+    }
+  }
+}
+
 export class ReportService {
   /**
    * List reports with comprehensive filtering, pagination, and role-based scoping.
@@ -216,6 +261,9 @@ export class ReportService {
 
     const sequence = Number(todayCountRes.count) + 1;
     const reportNumber = generateReportNumber(input.reportType as ReportTypeType, today, sequence);
+
+    // Validate and normalize sections & entries (labor attendance checks)
+    validateAndNormalizeSections(input.sections, input.reportType);
 
     // 4. Transactional insert
     const createdReport = await db.transaction(async (tx: any) => {
@@ -576,25 +624,132 @@ export class ReportService {
     ipAddress?: string,
     userAgent?: string
   ) {
-    const listResult = await this.listReports({ ...query, page: 1, limit: 1000 }, user);
+    const listResult = await this.listReports({ ...query, page: 1, limit: 2000 }, user);
     const rows = listResult.reports;
+    const db = getDb();
 
-    // Build CSV
-    const headers = ['Report Number', 'Date', 'Type', 'Project', 'Site', 'Submitted By', 'Status', 'Created At'];
-    const csvLines = [headers.join(',')];
+    let csvLines: string[] = [];
+    let filename = `Reports_Export_${new Date().toISOString().split('T')[0]}.csv`;
 
-    for (const r of rows) {
-      const line = [
-        `"${r.reportNumber}"`,
-        `"${r.reportDate}"`,
-        `"${r.reportType}"`,
-        `"${r.projectName.replace(/"/g, '""')}"`,
-        `"${r.siteName.replace(/"/g, '""')}"`,
-        `"${r.creatorName.replace(/"/g, '""')}"`,
-        `"${r.status}"`,
-        `"${new Date(r.createdAt).toISOString()}"`,
+    if (query.reportType === 'labor') {
+      // Detailed labor attendance export with classification snapshot and report-level totals
+      filename = `Labor_Attendance_Export_${new Date().toISOString().split('T')[0]}.csv`;
+      const headers = [
+        'Report Number',
+        'Report Date',
+        'Project',
+        'Site',
+        'Status',
+        'Submitted By',
+        'Labor Classification',
+        'Category Type',
+        'Total Workers',
+        'Present',
+        'Absent',
+        'Attendance %',
+        'Working Hours',
+        'Overtime Hours',
+        'Remarks',
       ];
-      csvLines.push(line.join(','));
+      csvLines.push(headers.join(','));
+
+      let grandTotalWorkers = 0;
+      let grandTotalPresent = 0;
+      let grandTotalAbsent = 0;
+      let grandTotalHours = 0;
+      let grandTotalOt = 0;
+
+      for (const r of rows) {
+        const sections = await db
+          .select()
+          .from(reportSections)
+          .where(eq(reportSections.reportId, r.id))
+          .orderBy(reportSections.sortOrder);
+
+        for (const sec of sections) {
+          const entries = await db
+            .select()
+            .from(reportEntries)
+            .where(eq(reportEntries.sectionId, sec.id))
+            .orderBy(reportEntries.sortOrder);
+
+          for (const ent of entries) {
+            const data = (ent.entryData || {}) as Record<string, any>;
+            const classification = data.classificationNameSnapshot || data.trade || data.agencyName || sec.sectionName;
+            const categoryType = data.categoryType || sec.sectionType.replace('labor_', '').replace('_labor', '');
+            const total = Number(data.totalWorkers ?? data.count ?? 0);
+            const present = Number(data.presentWorkers ?? (data.absentWorkers !== undefined ? total - Number(data.absentWorkers) : total));
+            const absent = Number(data.absentWorkers ?? (total - present));
+            const attRate = total > 0 ? ((present / total) * 100).toFixed(1) + '%' : '0.0%';
+            const workHours = Number(data.workingHours ?? data.standardHours ?? 8);
+            const otHours = Number(data.overtimeHours ?? 0);
+            const remarks = data.remarks || '';
+
+            grandTotalWorkers += total;
+            grandTotalPresent += present;
+            grandTotalAbsent += absent;
+            grandTotalHours += workHours;
+            grandTotalOt += otHours;
+
+            const line = [
+              `"${r.reportNumber}"`,
+              `"${r.reportDate}"`,
+              `"${r.projectName.replace(/"/g, '""')}"`,
+              `"${r.siteName.replace(/"/g, '""')}"`,
+              `"${r.status}"`,
+              `"${r.creatorName.replace(/"/g, '""')}"`,
+              `"${classification.replace(/"/g, '""')}"`,
+              `"${categoryType.replace(/"/g, '""')}"`,
+              total,
+              present,
+              absent,
+              `"${attRate}"`,
+              workHours,
+              otHours,
+              `"${String(remarks).replace(/"/g, '""')}"`,
+            ];
+            csvLines.push(line.join(','));
+          }
+        }
+      }
+
+      // Add report-level totals / summary row
+      const overallAttRate = grandTotalWorkers > 0 ? ((grandTotalPresent / grandTotalWorkers) * 100).toFixed(1) + '%' : '0.0%';
+      const summaryLine = [
+        `"TOTALS"`,
+        `""`,
+        `""`,
+        `""`,
+        `""`,
+        `""`,
+        `"ALL CLASSIFICATIONS"`,
+        `""`,
+        grandTotalWorkers,
+        grandTotalPresent,
+        grandTotalAbsent,
+        `"${overallAttRate}"`,
+        grandTotalHours,
+        grandTotalOt,
+        `""`,
+      ];
+      csvLines.push(summaryLine.join(','));
+    } else {
+      const headers = ['Report Number', 'Date', 'Type', 'Project', 'Site', 'Submitted By', 'Status', 'Created At'];
+      csvLines.push(headers.join(','));
+
+      for (const r of rows) {
+        const line = [
+          `"${r.reportNumber}"`,
+          `"${r.reportDate}"`,
+          `"${r.reportType}"`,
+          `"${r.projectName.replace(/"/g, '""')}"`,
+          `"${r.siteName.replace(/"/g, '""')}"`,
+          `"${r.creatorName.replace(/"/g, '""')}"`,
+          `"${r.status}"`,
+          `"${new Date(r.createdAt).toISOString()}"`,
+        ];
+        csvLines.push(line.join(','));
+      }
     }
 
     await recordAudit({
@@ -606,9 +761,11 @@ export class ReportService {
       userAgent,
     });
 
+    const csvContent = csvLines.join('\n');
     return {
-      csvData: csvLines.join('\n'),
-      filename: `Reports_Export_${new Date().toISOString().split('T')[0]}.csv`,
+      csv: csvContent,
+      csvData: csvContent,
+      filename,
       totalRecords: rows.length,
     };
   }
@@ -673,6 +830,10 @@ export class ReportService {
 
     if (report.status !== ReportStatus.DRAFT && report.status !== ReportStatus.REJECTED) {
       throw new Error(`Cannot edit report in '${report.status}' status`);
+    }
+
+    if (input.sections && input.sections.length > 0) {
+      validateAndNormalizeSections(input.sections, report.reportType);
     }
 
     await db.transaction(async (tx: any) => {

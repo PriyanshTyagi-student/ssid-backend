@@ -2,6 +2,7 @@ import { authenticate } from '../../middleware/auth.js';
 import { getDb } from '../../database/connection.js';
 import { laborCategories } from '../../database/schema/labor_categories.js';
 import { laborClassifications } from '../../database/schema/labor_classifications.js';
+import { users } from '../../database/schema/users.js';
 import { reportEntries } from '../../database/schema/reports.js';
 import { successResponse, errorResponse } from '../../utils/response.js';
 import { recordAudit } from '../audit/service.js';
@@ -40,8 +41,20 @@ export const laborCategoryRoutes = async (fastify) => {
         }
         const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
         const categories = await db
-            .select()
+            .select({
+            id: laborCategories.id,
+            name: laborCategories.name,
+            categoryType: laborCategories.categoryType,
+            orderIndex: laborCategories.orderIndex,
+            isActive: laborCategories.isActive,
+            createdBy: laborCategories.createdBy,
+            creatorName: users.name,
+            updatedBy: laborCategories.updatedBy,
+            createdAt: laborCategories.createdAt,
+            updatedAt: laborCategories.updatedAt,
+        })
             .from(laborCategories)
+            .leftJoin(users, eq(laborCategories.createdBy, users.id))
             .where(whereClause)
             .orderBy(asc(laborCategories.categoryType), asc(laborCategories.orderIndex), asc(laborCategories.name));
         return reply.send(successResponse(categories, 'Labor categories retrieved successfully'));
@@ -376,8 +389,16 @@ export const laborCategoryRoutes = async (fastify) => {
         },
     }, async (request, reply) => {
         const user = request.user;
-        if (user.role !== UserRole.ADMIN) {
-            return reply.status(403).send(errorResponse('FORBIDDEN', 'Only administrators can manage labor categories'));
+        const allowedRoles = [
+            UserRole.ADMIN,
+            UserRole.PROJECT_MANAGER,
+            UserRole.SITE_ENGINEER,
+            UserRole.SITE_SUPERVISOR,
+        ];
+        const hasPermission = allowedRoles.includes(user.role) ||
+            (user.permissions && user.permissions.includes('labor_categories.manage'));
+        if (!hasPermission) {
+            return reply.status(403).send(errorResponse('FORBIDDEN', 'You do not have permission to create labor classifications or categories'));
         }
         const body = request.body;
         const name = body.name.trim();
@@ -389,16 +410,17 @@ export const laborCategoryRoutes = async (fastify) => {
             return reply.status(400).send(errorResponse('BAD_REQUEST', 'Category classification cannot be empty'));
         }
         const db = getDb();
-        // Check case-insensitive duplicate in the same categoryType
+        // Check case-insensitive duplicate in the same categoryType (active or inactive)
+        const normalizedName = name.toLowerCase();
         const [existing] = await db
             .select()
             .from(laborCategories)
-            .where(and(eq(laborCategories.categoryType, categoryType), sql `lower(${laborCategories.name}) = lower(${name})`))
+            .where(and(eq(laborCategories.categoryType, categoryType), sql `lower(trim(${laborCategories.name})) = ${normalizedName}`))
             .limit(1);
         if (existing) {
             return reply
                 .status(409)
-                .send(errorResponse('DUPLICATE_CATEGORY', `A category named "${name}" already exists under ${categoryType}`));
+                .send(errorResponse('CONFLICT', 'A classification with this name already exists.'));
         }
         // Determine orderIndex if not provided
         let orderIndex = body.orderIndex;
@@ -416,6 +438,8 @@ export const laborCategoryRoutes = async (fastify) => {
             categoryType,
             orderIndex,
             isActive: body.isActive !== undefined ? body.isActive : true,
+            createdBy: user.id,
+            updatedBy: user.id,
         })
             .returning();
         await recordAudit({
@@ -458,8 +482,16 @@ export const laborCategoryRoutes = async (fastify) => {
         },
     }, async (request, reply) => {
         const user = request.user;
-        if (user.role !== UserRole.ADMIN) {
-            return reply.status(403).send(errorResponse('FORBIDDEN', 'Only administrators can manage labor categories'));
+        const allowedRoles = [
+            UserRole.ADMIN,
+            UserRole.PROJECT_MANAGER,
+            UserRole.SITE_ENGINEER,
+            UserRole.SITE_SUPERVISOR,
+        ];
+        const hasPermission = allowedRoles.includes(user.role) ||
+            (user.permissions && user.permissions.includes('labor_categories.manage'));
+        if (!hasPermission) {
+            return reply.status(403).send(errorResponse('FORBIDDEN', 'You do not have permission to update labor classifications or categories'));
         }
         const { id } = request.params;
         const body = request.body;
@@ -470,6 +502,7 @@ export const laborCategoryRoutes = async (fastify) => {
         }
         const updateData = {
             updatedAt: new Date(),
+            updatedBy: user.id,
         };
         if (body.name !== undefined) {
             const trimmed = body.name.trim();
@@ -497,12 +530,12 @@ export const laborCategoryRoutes = async (fastify) => {
         const [duplicate] = await db
             .select()
             .from(laborCategories)
-            .where(and(eq(laborCategories.categoryType, targetType), sql `lower(${laborCategories.name}) = lower(${targetName})`, sql `${laborCategories.id} != ${id}`))
+            .where(and(eq(laborCategories.categoryType, targetType), sql `lower(trim(${laborCategories.name})) = ${targetName.trim().toLowerCase()}`, sql `${laborCategories.id} != ${id}`))
             .limit(1);
         if (duplicate) {
             return reply
                 .status(409)
-                .send(errorResponse('DUPLICATE_CATEGORY', `A category named "${targetName}" already exists under ${targetType}`));
+                .send(errorResponse('CONFLICT', 'A classification with this name already exists.'));
         }
         const [updated] = await db
             .update(laborCategories)
@@ -564,18 +597,17 @@ export const laborCategoryRoutes = async (fastify) => {
             return reply.status(404).send(errorResponse('NOT_FOUND', 'Labor category not found'));
         }
         // Check if referenced in historical report_entries
-        // Reports store labor entries with trade name or category ID in entryData
         const [usageCheck] = await db
             .select({ id: reportEntries.id })
             .from(reportEntries)
-            .where(sql `${reportEntries.entryData}->>'categoryId' = ${id} OR ${reportEntries.entryData}->>'trade' = ${category.name}`)
+            .where(sql `${reportEntries.entryData}->>'categoryId' = ${id} OR ${reportEntries.entryData}->>'classificationId' = ${id} OR ${reportEntries.entryData}->>'trade' = ${category.name} OR ${reportEntries.entryData}->>'classificationNameSnapshot' = ${category.name}`)
             .limit(1);
         if (usageCheck) {
             return reply.status(409).send({
                 success: false,
                 error: {
                     code: 'CATEGORY_IN_USE',
-                    message: 'This category is already referenced by existing reports. Deactivate it instead of deleting it to preserve historical integrity.',
+                    message: 'This classification is referenced by existing reports. Deactivate it instead of deleting it to preserve historical integrity.',
                 },
             });
         }
@@ -593,6 +625,90 @@ export const laborCategoryRoutes = async (fastify) => {
             userAgent: request.headers['user-agent'],
         });
         return reply.send(successResponse({ id }, 'Labor category deleted successfully'));
+    });
+    // PATCH /api/v1/labor-categories/:id/deactivate
+    fastify.patch('/:id/deactivate', {
+        schema: {
+            description: 'Deactivate a labor category safely (preserves historical reports)',
+            tags: ['Labor Categories'],
+            security: [{ bearerAuth: [] }],
+            params: {
+                type: 'object',
+                required: ['id'],
+                properties: { id: { type: 'string', format: 'uuid' } },
+            },
+        },
+    }, async (request, reply) => {
+        const user = request.user;
+        const allowedRoles = [UserRole.ADMIN, UserRole.PROJECT_MANAGER, UserRole.SITE_ENGINEER, UserRole.SITE_SUPERVISOR];
+        const hasPermission = allowedRoles.includes(user.role) ||
+            (user.permissions && user.permissions.includes('labor_categories.manage'));
+        if (!hasPermission) {
+            return reply.status(403).send(errorResponse('FORBIDDEN', 'Insufficient permissions to deactivate classifications'));
+        }
+        const { id } = request.params;
+        const db = getDb();
+        const [category] = await db.select().from(laborCategories).where(eq(laborCategories.id, id)).limit(1);
+        if (!category) {
+            return reply.status(404).send(errorResponse('NOT_FOUND', 'Labor category not found'));
+        }
+        const [updated] = await db
+            .update(laborCategories)
+            .set({ isActive: false, updatedBy: user.id, updatedAt: new Date() })
+            .where(eq(laborCategories.id, id))
+            .returning();
+        await recordAudit({
+            userId: user.id,
+            action: AuditAction.LABOR_CATEGORY_DEACTIVATED,
+            entityType: 'labor_category',
+            entityId: id,
+            metadata: { name: category.name, categoryType: category.categoryType },
+            ipAddress: request.ip,
+            userAgent: request.headers['user-agent'],
+        });
+        return reply.send(successResponse(updated, 'Labor category deactivated successfully'));
+    });
+    // PATCH /api/v1/labor-categories/:id/reactivate
+    fastify.patch('/:id/reactivate', {
+        schema: {
+            description: 'Reactivate an inactive labor category',
+            tags: ['Labor Categories'],
+            security: [{ bearerAuth: [] }],
+            params: {
+                type: 'object',
+                required: ['id'],
+                properties: { id: { type: 'string', format: 'uuid' } },
+            },
+        },
+    }, async (request, reply) => {
+        const user = request.user;
+        const allowedRoles = [UserRole.ADMIN, UserRole.PROJECT_MANAGER, UserRole.SITE_ENGINEER, UserRole.SITE_SUPERVISOR];
+        const hasPermission = allowedRoles.includes(user.role) ||
+            (user.permissions && user.permissions.includes('labor_categories.manage'));
+        if (!hasPermission) {
+            return reply.status(403).send(errorResponse('FORBIDDEN', 'Insufficient permissions to reactivate classifications'));
+        }
+        const { id } = request.params;
+        const db = getDb();
+        const [category] = await db.select().from(laborCategories).where(eq(laborCategories.id, id)).limit(1);
+        if (!category) {
+            return reply.status(404).send(errorResponse('NOT_FOUND', 'Labor category not found'));
+        }
+        const [updated] = await db
+            .update(laborCategories)
+            .set({ isActive: true, updatedBy: user.id, updatedAt: new Date() })
+            .where(eq(laborCategories.id, id))
+            .returning();
+        await recordAudit({
+            userId: user.id,
+            action: AuditAction.LABOR_CATEGORY_ACTIVATED,
+            entityType: 'labor_category',
+            entityId: id,
+            metadata: { name: category.name, categoryType: category.categoryType },
+            ipAddress: request.ip,
+            userAgent: request.headers['user-agent'],
+        });
+        return reply.send(successResponse(updated, 'Labor category reactivated successfully'));
     });
 };
 //# sourceMappingURL=routes.js.map

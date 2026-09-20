@@ -153,9 +153,14 @@ export async function runMigrations() {
       category_type VARCHAR(50) NOT NULL,
       order_index INTEGER NOT NULL DEFAULT 0,
       is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_by UUID REFERENCES users(id),
+      updated_by UUID REFERENCES users(id),
       created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
     );
+
+    ALTER TABLE labor_categories ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES users(id);
+    ALTER TABLE labor_categories ADD COLUMN IF NOT EXISTS updated_by UUID REFERENCES users(id);
 
     CREATE UNIQUE INDEX IF NOT EXISTS labor_cat_type_name_uniq_idx ON labor_categories (category_type, name);
     CREATE INDEX IF NOT EXISTS labor_cat_type_idx ON labor_categories (category_type);
