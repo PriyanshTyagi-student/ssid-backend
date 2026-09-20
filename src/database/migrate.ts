@@ -161,6 +161,35 @@ export async function runMigrations() {
     CREATE INDEX IF NOT EXISTS labor_cat_type_idx ON labor_categories (category_type);
     CREATE INDEX IF NOT EXISTS labor_cat_order_idx ON labor_categories (order_index);
     CREATE INDEX IF NOT EXISTS labor_cat_active_idx ON labor_categories (is_active);
+
+    -- Roles Table
+    CREATE TABLE IF NOT EXISTS roles (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name VARCHAR(100) NOT NULL,
+      slug VARCHAR(50) NOT NULL UNIQUE,
+      description TEXT,
+      permissions JSONB NOT NULL DEFAULT '[]',
+      is_system BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS roles_slug_idx ON roles (slug);
+    CREATE INDEX IF NOT EXISTS roles_is_system_idx ON roles (is_system);
+
+    -- Labor Classifications Table
+    CREATE TABLE IF NOT EXISTS labor_classifications (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      code VARCHAR(50) NOT NULL UNIQUE,
+      name VARCHAR(100) NOT NULL,
+      description TEXT,
+      is_system BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS labor_class_code_idx ON labor_classifications (code);
+    CREATE INDEX IF NOT EXISTS labor_class_is_system_idx ON labor_classifications (is_system);
   `;
 
   try {
@@ -171,7 +200,41 @@ export async function runMigrations() {
     } else {
       await db.execute(sql.raw(migrationSql));
     }
-    logger.info('[MIGRATION] All tables, indexes, and constraints verified successfully.');
+
+    // Seed default system roles if not exist
+    const systemRolesSeed = `
+      INSERT INTO roles (name, slug, description, permissions, is_system)
+      VALUES 
+        ('Administrator', 'admin', 'Full system access, management, and audit visibility', '["reports.view","reports.create","reports.review","reports.approve","reports.reject","reports.delete","reports.export","projects.view","projects.manage","sites.view","sites.manage","users.view","users.manage","settings.view"]'::jsonb, true),
+        ('Project Manager', 'project_manager', 'Project oversight, report reviews, and team approvals', '["reports.view","reports.create","reports.review","reports.approve","reports.reject","reports.delete","reports.export","projects.view","projects.manage","sites.view","sites.manage","settings.view"]'::jsonb, true),
+        ('Site Engineer', 'site_engineer', 'Field data entry, site operations, and daily reporting', '["reports.view","reports.create","projects.view","sites.view","settings.view"]'::jsonb, true),
+        ('Site Supervisor', 'site_supervisor', 'Field supervision, labor attendance, and daily reporting', '["reports.view","reports.create","reports.approve","projects.view","sites.view","settings.view"]'::jsonb, true)
+      ON CONFLICT (slug) DO NOTHING;
+
+      INSERT INTO labor_classifications (code, name, description, is_system)
+      VALUES
+        ('skilled', 'Skilled Labor', 'Specialized and certified trades (masons, electricians, plumbers)', true),
+        ('unskilled', 'Unskilled Labor', 'General site labor, helpers, and manual support', true),
+        ('supervisory', 'Supervisory & Field Staff', 'Foremen, safety supervisors, and site leaders', true)
+      ON CONFLICT (code) DO NOTHING;
+
+      -- Sync any other custom classifications from existing labor_categories
+      INSERT INTO labor_classifications (code, name, description, is_system)
+      SELECT DISTINCT category_type, INITCAP(REPLACE(category_type, '_', ' ')), 'Imported category classification', false
+      FROM labor_categories
+      WHERE category_type NOT IN ('skilled', 'unskilled', 'supervisory')
+      ON CONFLICT (code) DO NOTHING;
+    `;
+
+    if (typeof client.exec === 'function') {
+      await client.exec(systemRolesSeed);
+    } else if (typeof client.query === 'function') {
+      await client.query(systemRolesSeed);
+    } else {
+      await db.execute(sql.raw(systemRolesSeed));
+    }
+
+    logger.info('[MIGRATION] All tables, indexes, constraints, and default roles/classifications verified successfully.');
   } catch (err) {
     logger.error({ err }, '[MIGRATION] Migration execution failed');
     throw err;

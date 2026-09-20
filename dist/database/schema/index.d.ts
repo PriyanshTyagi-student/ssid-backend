@@ -5,6 +5,8 @@ export * from './assignments.js';
 export * from './reports.js';
 export * from './audit.js';
 export * from './labor_categories.js';
+export * from './roles.js';
+export * from './labor_classifications.js';
 export declare const usersRelations: import("drizzle-orm").Relations<"users", {
     projectAssignments: import("drizzle-orm").Many<"user_project_assignments">;
     siteAssignments: import("drizzle-orm").Many<"user_site_assignments">;

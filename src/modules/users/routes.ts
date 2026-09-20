@@ -93,7 +93,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
             name: { type: 'string', minLength: 2 },
             phoneNumber: { type: 'string', minLength: 10 },
             password: { type: 'string', minLength: 6 },
-            role: { type: 'string', enum: ['admin', 'project_manager', 'site_engineer'] },
+            role: { type: 'string', minLength: 2, maxLength: 50 },
             status: { type: 'string', enum: ['active', 'inactive', 'suspended'] },
           },
         },
@@ -156,7 +156,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
           type: 'object',
           properties: {
             name: { type: 'string', minLength: 2 },
-            role: { type: 'string', enum: ['admin', 'project_manager', 'site_engineer'] },
+            role: { type: 'string', minLength: 2, maxLength: 50 },
             status: { type: 'string', enum: ['active', 'inactive', 'suspended'] },
             password: { type: 'string', minLength: 6 },
           },

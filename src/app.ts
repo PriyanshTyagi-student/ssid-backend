@@ -20,6 +20,7 @@ import { appVersionRoutes } from './modules/app/routes.js';
 import { notificationRoutes } from './modules/notifications/routes.js';
 import { laborCategoryRoutes } from './modules/labor-categories/routes.js';
 import { assignmentRoutes } from './modules/assignments/routes.js';
+import { roleRoutes } from './modules/roles/routes.js';
 
 export async function buildApp(): Promise<FastifyInstance<any, any, any, any>> {
   const app = Fastify({
@@ -114,6 +115,7 @@ export async function buildApp(): Promise<FastifyInstance<any, any, any, any>> {
       await v1.register(notificationRoutes, { prefix: '/notifications' });
       await v1.register(laborCategoryRoutes, { prefix: '/labor-categories' });
       await v1.register(assignmentRoutes, { prefix: '/assignments' });
+      await v1.register(roleRoutes, { prefix: '/roles' });
     },
     { prefix: '/api/v1' }
   );

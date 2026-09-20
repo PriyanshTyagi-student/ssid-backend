@@ -10,6 +10,7 @@ export declare class AuthService {
             name: any;
             phone: any;
             role: any;
+            permissions: string[];
             status: any;
             projectId: any;
             project_id: any;
@@ -23,6 +24,10 @@ export declare class AuthService {
             assignedSites: any;
         };
     }>;
+    /**
+     * Resolve user permissions from roles table or fallback defaults.
+     */
+    static getUserPermissions(userRole: string): Promise<string[]>;
     /**
      * Get user's assigned project and site details.
      */

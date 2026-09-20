@@ -3,6 +3,7 @@ import { users } from '../../database/schema/users.js';
 import { projects } from '../../database/schema/projects.js';
 import { sites } from '../../database/schema/sites.js';
 import { userProjectAssignments, userSiteAssignments } from '../../database/schema/assignments.js';
+import { roles } from '../../database/schema/roles.js';
 import { eq, asc, inArray } from 'drizzle-orm';
 import { verifyPassword, hashPassword } from '../../utils/password.js';
 import { generateToken } from '../../utils/jwt.js';
@@ -88,6 +89,7 @@ export class AuthService {
     });
 
     const assignments = await AuthService.getUserAssignments(user.id);
+    const permissions = await AuthService.getUserPermissions(user.role);
 
     return {
       accessToken: token,
@@ -97,6 +99,7 @@ export class AuthService {
         name: user.name,
         phone: user.phoneNumber,
         role: user.role,
+        permissions,
         status: user.status,
         projectId: assignments.primaryProjectId,
         project_id: assignments.primaryProjectId,
@@ -110,6 +113,41 @@ export class AuthService {
         assignedSites: assignments.assignedSites,
       },
     };
+  }
+
+  /**
+   * Resolve user permissions from roles table or fallback defaults.
+   */
+  static async getUserPermissions(userRole: string): Promise<string[]> {
+    const db = getDb();
+    const [roleRecord] = await db
+      .select({ permissions: roles.permissions })
+      .from(roles)
+      .where(eq(roles.slug, userRole))
+      .limit(1);
+
+    if (roleRecord && Array.isArray(roleRecord.permissions) && roleRecord.permissions.length > 0) {
+      return roleRecord.permissions;
+    }
+
+    if (userRole === UserRole.ADMIN) {
+      return [
+        'reports.view', 'reports.create', 'reports.review', 'reports.approve', 'reports.reject',
+        'reports.delete', 'reports.export', 'projects.view', 'projects.manage', 'sites.view',
+        'sites.manage', 'users.view', 'users.manage', 'settings.view'
+      ];
+    }
+    if (userRole === UserRole.PROJECT_MANAGER) {
+      return [
+        'reports.view', 'reports.create', 'reports.review', 'reports.approve', 'reports.reject',
+        'reports.delete', 'reports.export', 'projects.view', 'projects.manage', 'sites.view',
+        'sites.manage', 'settings.view'
+      ];
+    }
+    if (userRole === UserRole.SITE_SUPERVISOR) {
+      return ['reports.view', 'reports.create', 'reports.approve', 'projects.view', 'sites.view', 'settings.view'];
+    }
+    return ['reports.view', 'reports.create', 'projects.view', 'sites.view', 'settings.view'];
   }
 
   /**

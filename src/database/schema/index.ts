@@ -13,6 +13,8 @@ export * from './assignments.js';
 export * from './reports.js';
 export * from './audit.js';
 export * from './labor_categories.js';
+export * from './roles.js';
+export * from './labor_classifications.js';
 
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({

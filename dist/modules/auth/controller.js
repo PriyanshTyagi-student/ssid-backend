@@ -30,11 +30,13 @@ export class AuthController {
             return reply.status(401).send(errorResponse('UNAUTHORIZED', 'Not authenticated'));
         }
         const assignments = await AuthService.getUserAssignments(request.user.id);
+        const permissions = await AuthService.getUserPermissions(request.user.role);
         const user = {
             id: request.user.id,
             name: request.user.name,
             phone: request.user.phoneNumber,
             role: request.user.role,
+            permissions,
             status: request.user.status,
             projectId: assignments.primaryProjectId,
             project_id: assignments.primaryProjectId,
