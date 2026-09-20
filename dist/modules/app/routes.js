@@ -3,8 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { authenticate } from '../../middleware/auth.js';
-import { requireRoles } from '../../middleware/rbac.js';
-import { UserRole, AuditAction } from '../../config/constants.js';
+import { requirePermission } from '../../middleware/rbac.js';
+import { AuditAction } from '../../config/constants.js';
 import { successResponse, errorResponse } from '../../utils/response.js';
 import { recordAudit } from '../audit/service.js';
 import { AppUpdateService } from './updateService.js';
@@ -137,18 +137,18 @@ export const appVersionRoutes = async (fastify) => {
         return reply.send(fs.createReadStream(filePath));
     });
     // ==========================================
-    // AUTHENTICATED ADMIN-ONLY ENDPOINTS
+    // AUTHENTICATED MANAGEMENT ENDPOINTS
     // ==========================================
     fastify.register(async (adminRouter) => {
         adminRouter.addHook('preHandler', authenticate);
-        adminRouter.addHook('preHandler', requireRoles(UserRole.ADMIN));
         /**
          * GET /api/v1/app/updates
          * List all releases (draft, published, archived).
          */
         adminRouter.get('/updates', {
+            preHandler: [requirePermission('app_updates.view')],
             schema: {
-                description: 'List all application releases (Admin only)',
+                description: 'List all application releases',
                 tags: ['App Updates'],
                 security: [{ bearerAuth: [] }],
             },
@@ -161,8 +161,9 @@ export const appVersionRoutes = async (fastify) => {
          * Retrieve a specific release record.
          */
         adminRouter.get('/updates/:id', {
+            preHandler: [requirePermission('app_updates.view')],
             schema: {
-                description: 'Get application release by ID (Admin only)',
+                description: 'Get application release by ID',
                 tags: ['App Updates'],
                 security: [{ bearerAuth: [] }],
                 params: {
@@ -185,8 +186,9 @@ export const appVersionRoutes = async (fastify) => {
          * Validates package, extracts versionName/versionCode, and creates draft release.
          */
         adminRouter.post('/updates/upload', {
+            preHandler: [requirePermission('app_updates.upload')],
             schema: {
-                description: 'Upload an APK package to create a draft release (Admin only)',
+                description: 'Upload an APK package to create a draft release',
                 tags: ['App Updates'],
                 security: [{ bearerAuth: [] }],
             },
@@ -264,8 +266,9 @@ export const appVersionRoutes = async (fastify) => {
          * Atomically publishes the specified draft release.
          */
         adminRouter.post('/updates/:id/publish', {
+            preHandler: [requirePermission('app_updates.publish')],
             schema: {
-                description: 'Publish a draft application release (Admin only)',
+                description: 'Publish a draft application release',
                 tags: ['App Updates'],
                 security: [{ bearerAuth: [] }],
                 params: {
@@ -305,8 +308,9 @@ export const appVersionRoutes = async (fastify) => {
          * Mark a release as archived.
          */
         adminRouter.post('/updates/:id/archive', {
+            preHandler: [requirePermission('app_updates.publish', 'app_updates.upload')],
             schema: {
-                description: 'Archive an application release (Admin only)',
+                description: 'Archive an application release',
                 tags: ['App Updates'],
                 security: [{ bearerAuth: [] }],
                 params: {
@@ -343,8 +347,9 @@ export const appVersionRoutes = async (fastify) => {
          * Delete a release record (and file if unreferenced).
          */
         adminRouter.delete('/updates/:id', {
+            preHandler: [requirePermission('app_updates.delete')],
             schema: {
-                description: 'Delete a draft or archived release (Admin only)',
+                description: 'Delete a draft or archived release',
                 tags: ['App Updates'],
                 security: [{ bearerAuth: [] }],
                 params: {

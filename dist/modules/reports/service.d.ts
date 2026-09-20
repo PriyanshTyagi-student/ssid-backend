@@ -19,11 +19,11 @@ export declare class ReportService {
     /**
      * Create report with sections and entries inside a database transaction.
      */
-    static createReport(input: CreateReportInput, userId: string, userRole: string, ipAddress?: string, userAgent?: string): Promise<any>;
+    static createReport(input: CreateReportInput, user: any, ipAddress?: string, userAgent?: string): Promise<any>;
     /**
      * Submit report — enforces state transition to SUBMITTED.
      */
-    static submitReport(reportId: string, userId: string, userRole: string, ipAddress?: string, userAgent?: string): Promise<any>;
+    static submitReport(reportId: string, user: any, ipAddress?: string, userAgent?: string): Promise<any>;
     /**
      * Start review of report (SUBMITTED -> UNDER_REVIEW).
      */
@@ -76,8 +76,8 @@ export declare class ReportService {
     /**
      * Update report sections/entries if in DRAFT or REJECTED status.
      */
-    static updateReport(reportId: string, input: any, userId: string, userRole: string, ipAddress?: string, userAgent?: string): Promise<any>;
-    static deleteReport(reportId: string, userId: string, userRole: string, ipAddress?: string, userAgent?: string): Promise<{
+    static updateReport(reportId: string, input: any, user: any, ipAddress?: string, userAgent?: string): Promise<any>;
+    static deleteReport(reportId: string, user: any, ipAddress?: string, userAgent?: string): Promise<{
         id: string;
         deleted: boolean;
     }>;

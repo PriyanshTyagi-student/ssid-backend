@@ -1,9 +1,10 @@
 import { verifyToken } from '../utils/jwt.js';
 import { getDb } from '../database/connection.js';
 import { users } from '../database/schema/users.js';
+import { roles } from '../database/schema/roles.js';
 import { eq } from 'drizzle-orm';
 import { errorResponse } from '../utils/response.js';
-import { UserStatus } from '../config/constants.js';
+import { UserRole, UserStatus } from '../config/constants.js';
 export async function authenticate(request, reply) {
     const authHeader = request.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -22,7 +23,30 @@ export async function authenticate(request, reply) {
     if (user.status !== UserStatus.ACTIVE) {
         return reply.status(403).send(errorResponse('USER_DISABLED', 'Your account has been disabled. Please contact an administrator.'));
     }
-    request.user = user;
+    // Resolve user's permissions dynamically from roles table
+    let permissions = [];
+    try {
+        const [roleRecord] = await db
+            .select({ permissions: roles.permissions })
+            .from(roles)
+            .where(eq(roles.slug, user.role))
+            .limit(1);
+        if (roleRecord && Array.isArray(roleRecord.permissions)) {
+            permissions = roleRecord.permissions;
+        }
+    }
+    catch {
+        // Fallback
+    }
+    if (user.role === UserRole.ADMIN || user.role === 'admin') {
+        if (!permissions.includes('*')) {
+            permissions = ['*', ...permissions];
+        }
+    }
+    request.user = {
+        ...user,
+        permissions,
+    };
     request.tokenPayload = payload;
 }
 //# sourceMappingURL=auth.js.map

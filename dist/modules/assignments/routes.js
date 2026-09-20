@@ -1,4 +1,6 @@
 import { authenticate } from '../../middleware/auth.js';
+import { requirePermission } from '../../middleware/rbac.js';
+import { hasPermission } from '../../config/permissions.js';
 import { getDb } from '../../database/connection.js';
 import { users } from '../../database/schema/users.js';
 import { projects } from '../../database/schema/projects.js';
@@ -6,12 +8,13 @@ import { sites } from '../../database/schema/sites.js';
 import { userProjectAssignments, userSiteAssignments } from '../../database/schema/assignments.js';
 import { successResponse, errorResponse } from '../../utils/response.js';
 import { recordAudit } from '../audit/service.js';
-import { AuditAction, UserRole, ProjectStatus, SiteStatus } from '../../config/constants.js';
+import { AuditAction, ProjectStatus, SiteStatus } from '../../config/constants.js';
 import { eq, inArray, asc } from 'drizzle-orm';
 export const assignmentRoutes = async (fastify) => {
     fastify.addHook('preHandler', authenticate);
     // GET /api/v1/assignments/my-assignments (For authenticated user / mobile app)
     fastify.get('/my-assignments', {
+        preHandler: [requirePermission('assignments.view')],
         schema: {
             description: 'Get current authenticated user project and site assignments grouped by project',
             tags: ['Assignments'],
@@ -20,11 +23,11 @@ export const assignmentRoutes = async (fastify) => {
     }, async (request, reply) => {
         const user = request.user;
         const db = getDb();
-        // Admins and Project Managers have access to all active projects and sites
-        const isAdminOrPM = user.role === UserRole.ADMIN || user.role === UserRole.PROJECT_MANAGER;
+        // Users with manage permission or wildcard have access to all active projects and sites
+        const canManageAll = hasPermission(user.permissions, 'sites.manage') || hasPermission(user.permissions, 'projects.manage') || hasPermission(user.permissions, '*');
         let userProjects;
         let userSites;
-        if (isAdminOrPM) {
+        if (canManageAll) {
             userProjects = await db
                 .select({
                 id: projects.id,
@@ -84,18 +87,15 @@ export const assignmentRoutes = async (fastify) => {
             groupedProjects,
         }, 'User assignments retrieved successfully'));
     });
-    // GET /api/v1/assignments/users (Admin / PM: List field users with assignment counts)
+    // GET /api/v1/assignments/users (List field users with assignment counts)
     fastify.get('/users', {
+        preHandler: [requirePermission('assignments.manage', 'assignments.view', 'users.view')],
         schema: {
             description: 'List eligible field users with assignment stats',
             tags: ['Assignments'],
             security: [{ bearerAuth: [] }],
         },
     }, async (request, reply) => {
-        const user = request.user;
-        if (user.role !== UserRole.ADMIN && user.role !== UserRole.PROJECT_MANAGER) {
-            return reply.status(403).send(errorResponse('FORBIDDEN', 'Insufficient permissions'));
-        }
         const db = getDb();
         // Fetch all users eligible for assignments (including custom roles and field staff)
         const fieldUsers = await db
@@ -140,8 +140,9 @@ export const assignmentRoutes = async (fastify) => {
         });
         return reply.send(successResponse(userMatrix, 'Field users retrieved successfully'));
     });
-    // GET /api/v1/assignments/users/:userId (Admin / PM: Get detailed user assignments)
+    // GET /api/v1/assignments/users/:userId (Get detailed user assignments)
     fastify.get('/users/:userId', {
+        preHandler: [requirePermission('assignments.manage', 'assignments.view', 'users.view')],
         schema: {
             description: 'Get user assignments along with all available projects and sites',
             tags: ['Assignments'],
@@ -155,10 +156,6 @@ export const assignmentRoutes = async (fastify) => {
             },
         },
     }, async (request, reply) => {
-        const user = request.user;
-        if (user.role !== UserRole.ADMIN && user.role !== UserRole.PROJECT_MANAGER) {
-            return reply.status(403).send(errorResponse('FORBIDDEN', 'Insufficient permissions'));
-        }
         const { userId } = request.params;
         const db = getDb();
         const [targetUser] = await db
@@ -212,8 +209,9 @@ export const assignmentRoutes = async (fastify) => {
             allSites,
         }, 'User assignments retrieved successfully'));
     });
-    // PUT /api/v1/assignments/users/:userId (Admin / PM: Save assignments atomically)
+    // PUT /api/v1/assignments/users/:userId (Save assignments atomically)
     fastify.put('/users/:userId', {
+        preHandler: [requirePermission('assignments.manage', 'users.edit')],
         schema: {
             description: 'Update project and site assignments for a user atomically',
             tags: ['Assignments'],
@@ -235,9 +233,6 @@ export const assignmentRoutes = async (fastify) => {
         },
     }, async (request, reply) => {
         const user = request.user;
-        if (user.role !== UserRole.ADMIN && user.role !== UserRole.PROJECT_MANAGER) {
-            return reply.status(403).send(errorResponse('FORBIDDEN', 'Only administrators and project managers can assign projects and sites'));
-        }
         const { userId } = request.params;
         const body = request.body || {};
         const db = getDb();

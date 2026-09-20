@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { authenticate } from '../../middleware/auth.js';
+import { requirePermission } from '../../middleware/rbac.js';
 import { getDb } from '../../database/connection.js';
 import { users } from '../../database/schema/users.js';
 import { userProjectAssignments, userSiteAssignments } from '../../database/schema/assignments.js';
@@ -24,8 +25,9 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get(
     '/',
     {
+      preHandler: [requirePermission('users.view')],
       schema: {
-        description: 'List all users with pagination and filtering (Admin only)',
+        description: 'List all users with pagination and filtering',
         tags: ['Users'],
         security: [{ bearerAuth: [] }],
         querystring: {
@@ -41,9 +43,6 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const user = request.user!;
-      if (user.role !== UserRole.ADMIN) {
-        return reply.status(403).send(errorResponse('FORBIDDEN', 'Only administrators can list users'));
-      }
 
       const { page = 1, limit = 20 } = request.query as any;
       const offset = (Number(page) - 1) * Number(limit);
@@ -82,8 +81,9 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post(
     '/',
     {
+      preHandler: [requirePermission('users.create')],
       schema: {
-        description: 'Create a new user (Admin only)',
+        description: 'Create a new user',
         tags: ['Users'],
         security: [{ bearerAuth: [] }],
         body: {
@@ -101,9 +101,6 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const user = request.user!;
-      if (user.role !== UserRole.ADMIN) {
-        return reply.status(403).send(errorResponse('FORBIDDEN', 'Only administrators can create users'));
-      }
 
       const body = request.body as any;
       const db = getDb();
@@ -148,8 +145,9 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.patch(
     '/:id',
     {
+      preHandler: [requirePermission('users.edit')],
       schema: {
-        description: 'Update user status, role, name, or password (Admin only)',
+        description: 'Update user status, role, name, or password',
         tags: ['Users'],
         security: [{ bearerAuth: [] }],
         body: {
@@ -166,9 +164,6 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
     async (request, reply) => {
       const { id } = request.params as { id: string };
       const user = request.user!;
-      if (user.role !== UserRole.ADMIN) {
-        return reply.status(403).send(errorResponse('FORBIDDEN', 'Only administrators can modify users'));
-      }
 
       const body = request.body as any;
       const db = getDb();
@@ -209,8 +204,9 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.delete(
     '/:id',
     {
+      preHandler: [requirePermission('users.delete')],
       schema: {
-        description: 'Delete user account and related assignments (Admin only)',
+        description: 'Delete user account and related assignments',
         tags: ['Users'],
         security: [{ bearerAuth: [] }],
         params: {
@@ -230,9 +226,6 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
       const { id } = request.params as { id: string };
       const { cascade } = (request.query as { cascade?: boolean }) || {};
       const user = request.user!;
-      if (user.role !== UserRole.ADMIN) {
-        return reply.status(403).send(errorResponse('FORBIDDEN', 'Only administrators can delete users'));
-      }
 
       if (user.id === id) {
         return reply.status(400).send(errorResponse('BAD_REQUEST', 'You cannot delete your own account'));
@@ -332,6 +325,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
       phone: user.phoneNumber,
       phoneNumber: user.phoneNumber,
       role: user.role,
+      permissions: user.permissions || [],
       status: user.status,
       projectName: primaryProject,
       project_name: primaryProject,
@@ -428,6 +422,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get(
     '/:id/assignments',
     {
+      preHandler: [requirePermission('assignments.view', 'users.view')],
       schema: {
         description: 'Get project and site assignments for a user',
         tags: ['Users'],
@@ -436,9 +431,6 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const user = request.user!;
-      if (user.role !== UserRole.ADMIN && user.role !== UserRole.PROJECT_MANAGER) {
-        return reply.status(403).send(errorResponse('FORBIDDEN', 'Insufficient permissions'));
-      }
 
       const { id } = request.params as { id: string };
       const db = getDb();
@@ -492,6 +484,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.put(
     '/:id/assignments',
     {
+      preHandler: [requirePermission('assignments.manage', 'users.edit')],
       schema: {
         description: 'Update project and site assignments for a user',
         tags: ['Users'],
@@ -500,9 +493,6 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const user = request.user!;
-      if (user.role !== UserRole.ADMIN && user.role !== UserRole.PROJECT_MANAGER) {
-        return reply.status(403).send(errorResponse('FORBIDDEN', 'Only administrators and project managers can assign projects'));
-      }
 
       const { id } = request.params as { id: string };
       const body = (request.body as { projectIds?: string[]; siteIds?: string[] }) || {};

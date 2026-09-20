@@ -25,7 +25,8 @@ export declare class AuthService {
         };
     }>;
     /**
-     * Resolve user permissions from roles table or fallback defaults.
+     * Resolve user permissions dynamically from roles table.
+     * Administrators and roles with '*' bypass specific restrictions.
      */
     static getUserPermissions(userRole: string): Promise<string[]>;
     /**

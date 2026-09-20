@@ -155,14 +155,7 @@ export async function seedDatabase() {
       name: 'System Administrator',
       slug: 'admin',
       description: 'Full system and administrative access',
-      permissions: [
-        'reports.view', 'reports.create', 'reports.review', 'reports.approve', 'reports.reject', 'reports.delete', 'reports.export',
-        'projects.view', 'projects.manage',
-        'sites.view', 'sites.manage',
-        'users.view', 'users.manage',
-        'labor_categories.view', 'labor_categories.manage',
-        'system.audit', 'system.roles',
-      ],
+      permissions: ['*'],
       isSystem: true,
     },
     {
@@ -212,6 +205,9 @@ export async function seedDatabase() {
     if (!existingRole) {
       await db.insert(roles).values(r);
       logger.info(`[SEED] Created system role: ${r.name} (${r.slug})`);
+    } else if (r.slug === 'admin' && (!existingRole.permissions || !existingRole.permissions.includes('*'))) {
+      await db.update(roles).set({ permissions: ['*'] }).where(eq(roles.slug, 'admin'));
+      logger.info(`[SEED] Updated admin role permissions to wildcard`);
     }
   }
 

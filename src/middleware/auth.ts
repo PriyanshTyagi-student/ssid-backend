@@ -2,14 +2,19 @@ import type { FastifyRequest, FastifyReply } from 'fastify';
 import { verifyToken, type TokenPayload } from '../utils/jwt.js';
 import { getDb } from '../database/connection.js';
 import { users, type User } from '../database/schema/users.js';
+import { roles } from '../database/schema/roles.js';
 import { eq } from 'drizzle-orm';
 import { errorResponse } from '../utils/response.js';
-import { UserStatus } from '../config/constants.js';
+import { UserRole, UserStatus } from '../config/constants.js';
+
+export interface AuthenticatedUser extends User {
+  permissions: string[];
+}
 
 // Extend FastifyRequest type
 declare module 'fastify' {
   interface FastifyRequest {
-    user?: User;
+    user?: AuthenticatedUser;
     tokenPayload?: TokenPayload;
   }
 }
@@ -39,6 +44,31 @@ export async function authenticate(request: FastifyRequest, reply: FastifyReply)
     return reply.status(403).send(errorResponse('USER_DISABLED', 'Your account has been disabled. Please contact an administrator.'));
   }
 
-  request.user = user;
+  // Resolve user's permissions dynamically from roles table
+  let permissions: string[] = [];
+  try {
+    const [roleRecord] = await db
+      .select({ permissions: roles.permissions })
+      .from(roles)
+      .where(eq(roles.slug, user.role))
+      .limit(1);
+
+    if (roleRecord && Array.isArray(roleRecord.permissions)) {
+      permissions = roleRecord.permissions;
+    }
+  } catch {
+    // Fallback
+  }
+
+  if (user.role === UserRole.ADMIN || user.role === 'admin') {
+    if (!permissions.includes('*')) {
+      permissions = ['*', ...permissions];
+    }
+  }
+
+  request.user = {
+    ...user,
+    permissions,
+  };
   request.tokenPayload = payload;
 }

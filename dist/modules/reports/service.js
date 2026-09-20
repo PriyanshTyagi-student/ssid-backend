@@ -7,7 +7,8 @@ import { userProjectAssignments, userSiteAssignments } from '../../database/sche
 import { eq, and, desc, count, inArray, gte, lte } from 'drizzle-orm';
 import { generateReportNumber } from '../../utils/reportNumber.js';
 import { recordAudit } from '../audit/service.js';
-import { AuditAction, ReportStatus, UserRole } from '../../config/constants.js';
+import { AuditAction, ReportStatus } from '../../config/constants.js';
+import { hasPermission } from '../../config/permissions.js';
 function validateAndNormalizeSections(sections, reportType) {
     if (!sections || !Array.isArray(sections))
         return;
@@ -57,8 +58,9 @@ export class ReportService {
         const db = getDb();
         const offset = (query.page - 1) * query.limit;
         const conditions = [];
-        // Role-based scoping: Site engineers/supervisors only see reports for sites they are assigned to
-        if (user.role !== UserRole.ADMIN && user.role !== UserRole.PROJECT_MANAGER) {
+        // Permission-based scoping: Users without reports.manage or reports.view_all or wildcard only see reports for sites they are assigned to
+        const canViewAll = hasPermission(user.permissions, 'reports.manage') || hasPermission(user.permissions, 'reports.view_all') || hasPermission(user.permissions, '*');
+        if (!canViewAll) {
             const assignments = await db
                 .select({ siteId: userSiteAssignments.siteId })
                 .from(userSiteAssignments)
@@ -158,8 +160,9 @@ export class ReportService {
         if (!report) {
             throw new Error('Report not found');
         }
-        // Role verification
-        if (user.role !== UserRole.ADMIN && user.role !== UserRole.PROJECT_MANAGER) {
+        // Permission and scope verification
+        const canViewAll = hasPermission(user.permissions, 'reports.manage') || hasPermission(user.permissions, 'reports.view_all') || hasPermission(user.permissions, '*');
+        if (!canViewAll) {
             const [assignment] = await db
                 .select()
                 .from(userSiteAssignments)
@@ -194,15 +197,17 @@ export class ReportService {
     /**
      * Create report with sections and entries inside a database transaction.
      */
-    static async createReport(input, userId, userRole, ipAddress, userAgent) {
+    static async createReport(input, user, ipAddress, userAgent) {
         const db = getDb();
+        const userId = user.id;
         // 1. Verify site belongs to project
         const [site] = await db.select().from(sites).where(eq(sites.id, input.siteId)).limit(1);
         if (!site || site.projectId !== input.projectId) {
             throw new Error('Selected site does not belong to the specified project');
         }
-        // 2. Verify user is assigned to project or site (unless Admin/PM)
-        if (userRole !== UserRole.ADMIN && userRole !== UserRole.PROJECT_MANAGER) {
+        // 2. Verify user is assigned to project or site (unless reports.manage / wildcard)
+        const canManage = hasPermission(user.permissions, 'reports.manage') || hasPermission(user.permissions, '*');
+        if (!canManage) {
             const [projectAssignment] = await db
                 .select()
                 .from(userProjectAssignments)
@@ -280,14 +285,16 @@ export class ReportService {
     /**
      * Submit report — enforces state transition to SUBMITTED.
      */
-    static async submitReport(reportId, userId, userRole, ipAddress, userAgent) {
+    static async submitReport(reportId, user, ipAddress, userAgent) {
         const db = getDb();
+        const userId = user.id;
         const [report] = await db.select().from(reports).where(eq(reports.id, reportId)).limit(1);
         if (!report) {
             throw new Error('Report not found');
         }
-        // Only creator or admin/PM can submit
-        if (userRole !== UserRole.ADMIN && userRole !== UserRole.PROJECT_MANAGER && report.createdBy !== userId) {
+        // Only creator or admin/manager can submit
+        const canManage = hasPermission(user.permissions, 'reports.manage') || hasPermission(user.permissions, '*');
+        if (!canManage && report.createdBy !== userId) {
             throw new Error('Only the report author or administrator can submit this report');
         }
         // State machine: can only submit if currently in DRAFT or REJECTED
@@ -680,13 +687,15 @@ export class ReportService {
     /**
      * Update report sections/entries if in DRAFT or REJECTED status.
      */
-    static async updateReport(reportId, input, userId, userRole, ipAddress, userAgent) {
+    static async updateReport(reportId, input, user, ipAddress, userAgent) {
         const db = getDb();
+        const userId = user.id;
         const [report] = await db.select().from(reports).where(eq(reports.id, reportId)).limit(1);
         if (!report) {
             throw new Error('Report not found');
         }
-        if (userRole !== UserRole.ADMIN && userRole !== UserRole.PROJECT_MANAGER && report.createdBy !== userId) {
+        const canManage = hasPermission(user.permissions, 'reports.manage') || hasPermission(user.permissions, '*');
+        if (!canManage && report.createdBy !== userId) {
             throw new Error('You can only edit your own reports');
         }
         if (report.status !== ReportStatus.DRAFT && report.status !== ReportStatus.REJECTED) {
@@ -742,15 +751,17 @@ export class ReportService {
             ipAddress,
             userAgent,
         });
-        return await ReportService.getReportById(reportId, { id: userId, role: userRole });
+        return await ReportService.getReportById(reportId, user);
     }
-    static async deleteReport(reportId, userId, userRole, ipAddress, userAgent) {
+    static async deleteReport(reportId, user, ipAddress, userAgent) {
         const db = getDb();
+        const userId = user.id;
         const [report] = await db.select().from(reports).where(eq(reports.id, reportId)).limit(1);
         if (!report) {
             throw new Error('Report not found');
         }
-        if (userRole !== UserRole.ADMIN && userRole !== UserRole.PROJECT_MANAGER) {
+        const canManage = hasPermission(user.permissions, 'reports.manage') || hasPermission(user.permissions, '*');
+        if (!canManage) {
             if (report.createdBy !== userId) {
                 throw new Error('You do not have permission to delete this report');
             }

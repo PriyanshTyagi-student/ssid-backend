@@ -101,7 +101,8 @@ export class AuthService {
         };
     }
     /**
-     * Resolve user permissions from roles table or fallback defaults.
+     * Resolve user permissions dynamically from roles table.
+     * Administrators and roles with '*' bypass specific restrictions.
      */
     static async getUserPermissions(userRole) {
         const db = getDb();
@@ -113,24 +114,10 @@ export class AuthService {
         if (roleRecord && Array.isArray(roleRecord.permissions) && roleRecord.permissions.length > 0) {
             return roleRecord.permissions;
         }
-        if (userRole === UserRole.ADMIN) {
-            return [
-                'reports.view', 'reports.create', 'reports.review', 'reports.approve', 'reports.reject',
-                'reports.delete', 'reports.export', 'projects.view', 'projects.manage', 'sites.view',
-                'sites.manage', 'users.view', 'users.manage', 'settings.view'
-            ];
+        if (userRole === UserRole.ADMIN || userRole === 'admin') {
+            return ['*'];
         }
-        if (userRole === UserRole.PROJECT_MANAGER) {
-            return [
-                'reports.view', 'reports.create', 'reports.review', 'reports.approve', 'reports.reject',
-                'reports.delete', 'reports.export', 'projects.view', 'projects.manage', 'sites.view',
-                'sites.manage', 'settings.view'
-            ];
-        }
-        if (userRole === UserRole.SITE_SUPERVISOR) {
-            return ['reports.view', 'reports.create', 'reports.approve', 'projects.view', 'sites.view', 'settings.view'];
-        }
-        return ['reports.view', 'reports.create', 'projects.view', 'sites.view', 'settings.view'];
+        return [];
     }
     /**
      * Get user's assigned project and site details.
@@ -138,8 +125,13 @@ export class AuthService {
     static async getUserAssignments(userId) {
         const db = getDb();
         const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
-        // Admins and Project Managers have universal access to all active projects and sites
-        if (user?.role === UserRole.ADMIN || user?.role === UserRole.PROJECT_MANAGER) {
+        const userPermissions = await AuthService.getUserPermissions(user?.role || '');
+        const isGlobalManager = user?.role === UserRole.ADMIN ||
+            userPermissions.includes('*') ||
+            userPermissions.includes('sites.manage') ||
+            userPermissions.includes('projects.manage');
+        // Users with global access can access all active projects and sites
+        if (isGlobalManager) {
             const allProjects = await db
                 .select({ id: projects.id, name: projects.name })
                 .from(projects)

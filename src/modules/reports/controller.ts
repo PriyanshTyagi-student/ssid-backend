@@ -25,8 +25,7 @@ export class ReportController {
     try {
       const report = await ReportService.createReport(
         input,
-        request.user!.id,
-        request.user!.role,
+        request.user!,
         request.ip,
         request.headers['user-agent']
       );
@@ -41,8 +40,7 @@ export class ReportController {
     try {
       const report = await ReportService.submitReport(
         id,
-        request.user!.id,
-        request.user!.role,
+        request.user!,
         request.ip,
         request.headers['user-agent']
       );
@@ -138,8 +136,7 @@ export class ReportController {
       const updated = await ReportService.updateReport(
         id,
         request.body,
-        request.user!.id,
-        request.user!.role,
+        request.user!,
         request.ip,
         request.headers['user-agent']
       );
@@ -154,8 +151,7 @@ export class ReportController {
     try {
       const result = await ReportService.deleteReport(
         id,
-        request.user!.id,
-        request.user!.role,
+        request.user!,
         request.ip,
         request.headers['user-agent']
       );

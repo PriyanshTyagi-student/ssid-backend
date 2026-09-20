@@ -1,6 +1,8 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { authenticate } from '../../middleware/auth.js';
+import { requirePermission } from '../../middleware/rbac.js';
+import { hasPermission } from '../../config/permissions.js';
 import { getDb } from '../../database/connection.js';
 import { sites } from '../../database/schema/sites.js';
 import { projects } from '../../database/schema/projects.js';
@@ -9,7 +11,7 @@ import { userSiteAssignments } from '../../database/schema/assignments.js';
 import { eq, inArray, count, and } from 'drizzle-orm';
 import { successResponse, errorResponse } from '../../utils/response.js';
 import { recordAudit } from '../audit/service.js';
-import { AuditAction, UserRole } from '../../config/constants.js';
+import { AuditAction } from '../../config/constants.js';
 
 const siteListQuerySchema = z.object({
   projectId: z.string().uuid().optional(),
@@ -24,8 +26,9 @@ export const siteRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get(
     '/',
     {
+      preHandler: [requirePermission('sites.view')],
       schema: {
-        description: 'List construction sites (scoped to user assignments)',
+        description: 'List construction sites (scoped to user assignments unless permitted to manage)',
         tags: ['Sites'],
         security: [{ bearerAuth: [] }],
         querystring: {
@@ -47,7 +50,9 @@ export const siteRoutes: FastifyPluginAsync = async (fastify) => {
       let siteList: any[];
       let totalSites = 0;
 
-      if (user.role === UserRole.ADMIN || user.role === UserRole.PROJECT_MANAGER) {
+      const canViewAll = hasPermission(user.permissions, 'sites.manage') || hasPermission(user.permissions, '*');
+
+      if (canViewAll) {
         const whereClause = query.projectId ? eq(sites.projectId, query.projectId) : undefined;
 
         const [totalRes] = await db
@@ -139,6 +144,7 @@ export const siteRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get(
     '/:id',
     {
+      preHandler: [requirePermission('sites.view')],
       schema: {
         description: 'Get site detail by ID',
         tags: ['Sites'],
@@ -150,8 +156,10 @@ export const siteRoutes: FastifyPluginAsync = async (fastify) => {
       const db = getDb();
       const user = request.user!;
 
-      // Verify assignment access for site engineers
-      if (user.role !== UserRole.ADMIN && user.role !== UserRole.PROJECT_MANAGER) {
+      const canViewAll = hasPermission(user.permissions, 'sites.manage') || hasPermission(user.permissions, '*');
+
+      // Verify assignment access for scoped users
+      if (!canViewAll) {
         const [assignment] = await db
           .select()
           .from(userSiteAssignments)
@@ -191,6 +199,7 @@ export const siteRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post(
     '/',
     {
+      preHandler: [requirePermission('sites.create')],
       schema: {
         description: 'Create a new construction site',
         tags: ['Sites'],
@@ -209,11 +218,6 @@ export const siteRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
     async (request, reply) => {
-      const user = request.user!;
-      if (user.role !== UserRole.ADMIN && user.role !== UserRole.PROJECT_MANAGER) {
-        return reply.status(403).send(errorResponse('FORBIDDEN', 'Insufficient permissions to create sites'));
-      }
-
       const body = request.body as any;
       const db = getDb();
 
@@ -242,6 +246,7 @@ export const siteRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.patch(
     '/:id',
     {
+      preHandler: [requirePermission('sites.edit')],
       schema: {
         description: 'Update site details',
         tags: ['Sites'],
@@ -259,11 +264,6 @@ export const siteRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const { id } = request.params as { id: string };
-      const user = request.user!;
-      if (user.role !== UserRole.ADMIN && user.role !== UserRole.PROJECT_MANAGER) {
-        return reply.status(403).send(errorResponse('FORBIDDEN', 'Insufficient permissions to modify sites'));
-      }
-
       const body = request.body as any;
       const db = getDb();
 
@@ -285,12 +285,13 @@ export const siteRoutes: FastifyPluginAsync = async (fastify) => {
     }
   );
 
-  // DELETE /api/v1/sites/:id (Admin or Project Manager)
+  // DELETE /api/v1/sites/:id
   fastify.delete(
     '/:id',
     {
+      preHandler: [requirePermission('sites.delete')],
       schema: {
-        description: 'Delete construction site (Admin / PM only)',
+        description: 'Delete construction site',
         tags: ['Sites'],
         security: [{ bearerAuth: [] }],
         params: {
@@ -310,9 +311,6 @@ export const siteRoutes: FastifyPluginAsync = async (fastify) => {
       const { id } = request.params as { id: string };
       const { cascade } = (request.query as { cascade?: boolean }) || {};
       const user = request.user!;
-      if (user.role !== UserRole.ADMIN && user.role !== UserRole.PROJECT_MANAGER) {
-        return reply.status(403).send(errorResponse('FORBIDDEN', 'Insufficient permissions to delete sites'));
-      }
 
       const db = getDb();
       const [existing] = await db.select().from(sites).where(eq(sites.id, id)).limit(1);

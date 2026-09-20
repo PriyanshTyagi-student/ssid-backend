@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { ReportController } from './controller.js';
 import { authenticate } from '../../middleware/auth.js';
+import { requirePermission } from '../../middleware/rbac.js';
 
 export const reportRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.addHook('preHandler', authenticate);
@@ -9,6 +10,7 @@ export const reportRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get(
     '/',
     {
+      preHandler: [requirePermission('reports.view')],
       schema: {
         description: 'List reports with filtering, pagination, and assignment-based scoping',
         tags: ['Reports'],
@@ -36,6 +38,7 @@ export const reportRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get(
     '/stats/dashboard',
     {
+      preHandler: [requirePermission('reports.view')],
       schema: {
         description: 'Get aggregate KPI metrics and status counts for admin dashboard',
         tags: ['Reports'],
@@ -49,6 +52,7 @@ export const reportRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get(
     '/export',
     {
+      preHandler: [requirePermission('reports.export', 'reports.view')],
       schema: {
         description: 'Export reports to CSV with audit logging',
         tags: ['Reports'],
@@ -62,6 +66,7 @@ export const reportRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get(
     '/today-summary',
     {
+      preHandler: [requirePermission('reports.view')],
       schema: {
         description: "Get today's submission status for material, labor, and machinery",
         tags: ['Reports'],
@@ -75,6 +80,7 @@ export const reportRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get(
     '/:id',
     {
+      preHandler: [requirePermission('reports.view')],
       schema: {
         description: 'Get full report details including sections and entries',
         tags: ['Reports'],
@@ -88,6 +94,7 @@ export const reportRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.patch(
     '/:id',
     {
+      preHandler: [requirePermission('reports.edit')],
       schema: {
         description: 'Update report sections/entries (when in draft or rejected status)',
         tags: ['Reports'],
@@ -101,8 +108,9 @@ export const reportRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.delete(
     '/:id',
     {
+      preHandler: [requirePermission('reports.delete')],
       schema: {
-        description: 'Delete report and its sections/entries (Admin, or creator if draft/rejected)',
+        description: 'Delete report and its sections/entries',
         tags: ['Reports'],
         security: [{ bearerAuth: [] }],
       },
@@ -114,6 +122,7 @@ export const reportRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post(
     '/',
     {
+      preHandler: [requirePermission('reports.create')],
       schema: {
         description: 'Create a new daily report (Material, Labor, or Machinery)',
         tags: ['Reports'],
@@ -159,6 +168,7 @@ export const reportRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post(
     '/:id/submit',
     {
+      preHandler: [requirePermission('reports.create', 'reports.edit')],
       schema: {
         description: 'Submit report for review (state transition DRAFT -> SUBMITTED)',
         tags: ['Reports'],
@@ -172,6 +182,7 @@ export const reportRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post(
     '/:id/review',
     {
+      preHandler: [requirePermission('reports.review')],
       schema: {
         description: 'Mark report under review (state transition SUBMITTED -> UNDER_REVIEW)',
         tags: ['Reports'],
@@ -185,6 +196,7 @@ export const reportRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post(
     '/:id/approve',
     {
+      preHandler: [requirePermission('reports.approve')],
       schema: {
         description: 'Approve report (state transition SUBMITTED/UNDER_REVIEW -> APPROVED)',
         tags: ['Reports'],
@@ -198,6 +210,7 @@ export const reportRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post(
     '/:id/reject',
     {
+      preHandler: [requirePermission('reports.reject')],
       schema: {
         description: 'Reject report with reason (state transition SUBMITTED/UNDER_REVIEW -> REJECTED)',
         tags: ['Reports'],

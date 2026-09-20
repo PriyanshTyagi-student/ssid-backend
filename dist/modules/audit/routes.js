@@ -1,18 +1,17 @@
 import { z } from 'zod';
 import { authenticate } from '../../middleware/auth.js';
-import { requireRoles } from '../../middleware/rbac.js';
+import { requirePermission } from '../../middleware/rbac.js';
 import { getDb } from '../../database/connection.js';
 import { auditLogs } from '../../database/schema/audit.js';
 import { desc, count } from 'drizzle-orm';
 import { successResponse } from '../../utils/response.js';
-import { UserRole } from '../../config/constants.js';
 const auditQuerySchema = z.object({
     page: z.coerce.number().min(1).default(1),
     limit: z.coerce.number().min(1).max(100).default(20),
 });
 export const auditRoutes = async (fastify) => {
     fastify.addHook('preHandler', authenticate);
-    fastify.addHook('preHandler', requireRoles(UserRole.ADMIN));
+    fastify.addHook('preHandler', requirePermission('audit.view', 'settings.view'));
     fastify.get('/', {
         schema: {
             description: 'Query audit logs (Admin only)',

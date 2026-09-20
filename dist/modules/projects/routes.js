@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { authenticate } from '../../middleware/auth.js';
+import { requirePermission } from '../../middleware/rbac.js';
+import { hasPermission } from '../../config/permissions.js';
 import { getDb } from '../../database/connection.js';
 import { projects } from '../../database/schema/projects.js';
 import { sites } from '../../database/schema/sites.js';
@@ -8,7 +10,7 @@ import { userProjectAssignments, userSiteAssignments } from '../../database/sche
 import { eq, inArray, count } from 'drizzle-orm';
 import { successResponse, errorResponse } from '../../utils/response.js';
 import { recordAudit } from '../audit/service.js';
-import { AuditAction, UserRole } from '../../config/constants.js';
+import { AuditAction } from '../../config/constants.js';
 const listQuerySchema = z.object({
     page: z.coerce.number().min(1).default(1),
     limit: z.coerce.number().min(1).max(100).default(20),
@@ -17,8 +19,9 @@ export const projectRoutes = async (fastify) => {
     fastify.addHook('preHandler', authenticate);
     // GET /api/v1/projects
     fastify.get('/', {
+        preHandler: [requirePermission('projects.view')],
         schema: {
-            description: 'List projects (scoped to authenticated user assignments)',
+            description: 'List projects (scoped to authenticated user assignments unless permitted to manage)',
             tags: ['Projects'],
             security: [{ bearerAuth: [] }],
             querystring: {
@@ -36,7 +39,8 @@ export const projectRoutes = async (fastify) => {
         const offset = (query.page - 1) * query.limit;
         let projectList;
         let totalProjects = 0;
-        if (user.role === UserRole.ADMIN || user.role === UserRole.PROJECT_MANAGER) {
+        const canViewAll = hasPermission(user.permissions, 'projects.manage') || hasPermission(user.permissions, '*');
+        if (canViewAll) {
             const [totalRes] = await db.select({ count: count() }).from(projects);
             totalProjects = Number(totalRes.count);
             projectList = await db
@@ -83,6 +87,7 @@ export const projectRoutes = async (fastify) => {
     });
     // GET /api/v1/projects/:id
     fastify.get('/:id', {
+        preHandler: [requirePermission('projects.view')],
         schema: {
             description: 'Get project details and its associated sites',
             tags: ['Projects'],
@@ -92,8 +97,9 @@ export const projectRoutes = async (fastify) => {
         const { id } = request.params;
         const db = getDb();
         const user = request.user;
-        // Verify access for non-admin
-        if (user.role !== UserRole.ADMIN && user.role !== UserRole.PROJECT_MANAGER) {
+        const canViewAll = hasPermission(user.permissions, 'projects.manage') || hasPermission(user.permissions, '*');
+        // Verify access for scoped users
+        if (!canViewAll) {
             const [assignment] = await db
                 .select()
                 .from(userProjectAssignments)
@@ -115,8 +121,9 @@ export const projectRoutes = async (fastify) => {
     });
     // POST /api/v1/projects
     fastify.post('/', {
+        preHandler: [requirePermission('projects.create')],
         schema: {
-            description: 'Create a new project (Admin or Project Manager)',
+            description: 'Create a new project',
             tags: ['Projects'],
             security: [{ bearerAuth: [] }],
             body: {
@@ -134,10 +141,6 @@ export const projectRoutes = async (fastify) => {
             },
         },
     }, async (request, reply) => {
-        const user = request.user;
-        if (user.role !== UserRole.ADMIN && user.role !== UserRole.PROJECT_MANAGER) {
-            return reply.status(403).send(errorResponse('FORBIDDEN', 'Insufficient permissions to create projects'));
-        }
         const body = request.body;
         const db = getDb();
         // Check unique projectCode
@@ -161,6 +164,7 @@ export const projectRoutes = async (fastify) => {
     });
     // PATCH /api/v1/projects/:id
     fastify.patch('/:id', {
+        preHandler: [requirePermission('projects.edit')],
         schema: {
             description: 'Update project details',
             tags: ['Projects'],
@@ -179,10 +183,6 @@ export const projectRoutes = async (fastify) => {
         },
     }, async (request, reply) => {
         const { id } = request.params;
-        const user = request.user;
-        if (user.role !== UserRole.ADMIN && user.role !== UserRole.PROJECT_MANAGER) {
-            return reply.status(403).send(errorResponse('FORBIDDEN', 'Insufficient permissions to modify projects'));
-        }
         const body = request.body;
         const db = getDb();
         const [existing] = await db.select().from(projects).where(eq(projects.id, id)).limit(1);
@@ -199,10 +199,11 @@ export const projectRoutes = async (fastify) => {
             .returning();
         return reply.send(successResponse(updated, 'Project updated successfully'));
     });
-    // DELETE /api/v1/projects/:id (Admin only)
+    // DELETE /api/v1/projects/:id
     fastify.delete('/:id', {
+        preHandler: [requirePermission('projects.delete')],
         schema: {
-            description: 'Delete project and related site records (Admin only)',
+            description: 'Delete project and related site records',
             tags: ['Projects'],
             security: [{ bearerAuth: [] }],
             params: {
@@ -221,9 +222,6 @@ export const projectRoutes = async (fastify) => {
         const { id } = request.params;
         const { cascade } = request.query || {};
         const user = request.user;
-        if (user.role !== UserRole.ADMIN) {
-            return reply.status(403).send(errorResponse('FORBIDDEN', 'Only administrators can delete projects'));
-        }
         const db = getDb();
         const [existing] = await db.select().from(projects).where(eq(projects.id, id)).limit(1);
         if (!existing) {

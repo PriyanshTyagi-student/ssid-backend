@@ -1,12 +1,11 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { authenticate } from '../../middleware/auth.js';
-import { requireRoles } from '../../middleware/rbac.js';
+import { requirePermission } from '../../middleware/rbac.js';
 import { getDb } from '../../database/connection.js';
 import { auditLogs } from '../../database/schema/audit.js';
 import { desc, count } from 'drizzle-orm';
 import { successResponse } from '../../utils/response.js';
-import { UserRole } from '../../config/constants.js';
 
 const auditQuerySchema = z.object({
   page: z.coerce.number().min(1).default(1),
@@ -15,7 +14,7 @@ const auditQuerySchema = z.object({
 
 export const auditRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.addHook('preHandler', authenticate);
-  fastify.addHook('preHandler', requireRoles(UserRole.ADMIN));
+  fastify.addHook('preHandler', requirePermission('audit.view', 'settings.view'));
 
   fastify.get(
     '/',

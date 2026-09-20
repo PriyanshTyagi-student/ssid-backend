@@ -1,5 +1,7 @@
 import { FastifyPluginAsync } from 'fastify';
 import { authenticate } from '../../middleware/auth.js';
+import { requirePermission } from '../../middleware/rbac.js';
+import { hasPermission } from '../../config/permissions.js';
 import { getDb } from '../../database/connection.js';
 import { laborCategories } from '../../database/schema/labor_categories.js';
 import { laborClassifications } from '../../database/schema/labor_classifications.js';
@@ -7,7 +9,7 @@ import { users } from '../../database/schema/users.js';
 import { reportEntries } from '../../database/schema/reports.js';
 import { successResponse, errorResponse } from '../../utils/response.js';
 import { recordAudit } from '../audit/service.js';
-import { AuditAction, UserRole, LaborCategoryType } from '../../config/constants.js';
+import { AuditAction, LaborCategoryType } from '../../config/constants.js';
 import { eq, and, asc, sql, ilike, or } from 'drizzle-orm';
 
 export const laborCategoryRoutes: FastifyPluginAsync = async (fastify) => {
@@ -18,6 +20,7 @@ export const laborCategoryRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get(
     '/',
     {
+      preHandler: [requirePermission('labor_categories.view')],
       schema: {
         description: 'List labor categories (active by default, ordered by order_index)',
         tags: ['Labor Categories'],
@@ -36,9 +39,12 @@ export const laborCategoryRoutes: FastifyPluginAsync = async (fastify) => {
       const query = request.query as { includeInactive?: boolean | string; categoryType?: string };
       const db = getDb();
 
-      // Only Admin / Project Manager can view inactive categories
+      // Users with manage/edit/view_inactive or wildcard can view inactive categories
       const canViewInactive =
-        (user.role === UserRole.ADMIN || user.role === UserRole.PROJECT_MANAGER) &&
+        (hasPermission(user.permissions, 'labor_categories.manage') ||
+          hasPermission(user.permissions, 'labor_categories.edit') ||
+          hasPermission(user.permissions, 'labor_categories.view_inactive') ||
+          hasPermission(user.permissions, '*')) &&
         (query.includeInactive === true || query.includeInactive === 'true');
 
       const conditions: any[] = [];
@@ -77,6 +83,7 @@ export const laborCategoryRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get(
     '/classifications',
     {
+      preHandler: [requirePermission('labor_categories.view')],
       schema: {
         description: 'Get all labor category classifications with category counts and system status',
         tags: ['Labor Categories'],
@@ -109,25 +116,20 @@ export const laborCategoryRoutes: FastifyPluginAsync = async (fastify) => {
     }
   );
 
-  async function hasClassificationManagePermission(user: any): Promise<boolean> {
-    if (user.role === UserRole.ADMIN) return true;
-    try {
-      const db = getDb();
-      const { roles } = await import('../../database/schema/roles.js');
-      const [userRole] = await db.select().from(roles).where(eq(roles.slug, user.role)).limit(1);
-      if (userRole && Array.isArray(userRole.permissions)) {
-        return userRole.permissions.includes('labor_categories.manage');
-      }
-    } catch {
-      // fallback
-    }
-    return false;
+  function hasClassificationManagePermission(user: any): boolean {
+    return (
+      hasPermission(user.permissions, 'labor_categories.manage') ||
+      hasPermission(user.permissions, 'labor_categories.edit') ||
+      hasPermission(user.permissions, 'labor_categories.create') ||
+      hasPermission(user.permissions, '*')
+    );
   }
 
-  // POST /api/v1/labor-categories/classifications (Admin / Manage Permission)
+  // POST /api/v1/labor-categories/classifications
   fastify.post(
     '/classifications',
     {
+      preHandler: [requirePermission('labor_categories.create', 'labor_categories.manage')],
       schema: {
         description: 'Create a new labor category classification',
         tags: ['Labor Categories'],
@@ -192,10 +194,11 @@ export const laborCategoryRoutes: FastifyPluginAsync = async (fastify) => {
     }
   );
 
-  // PUT /api/v1/labor-categories/classifications/:code (Admin only)
+  // PUT /api/v1/labor-categories/classifications/:code
   fastify.put(
     '/classifications/:code',
     {
+      preHandler: [requirePermission('labor_categories.edit', 'labor_categories.manage')],
       schema: {
         description: 'Update or rename a labor classification',
         tags: ['Labor Categories'],
@@ -299,10 +302,11 @@ export const laborCategoryRoutes: FastifyPluginAsync = async (fastify) => {
     }
   );
 
-  // DELETE /api/v1/labor-categories/classifications/:code (Admin only)
+  // DELETE /api/v1/labor-categories/classifications/:code
   fastify.delete(
     '/classifications/:code',
     {
+      preHandler: [requirePermission('labor_categories.delete', 'labor_categories.manage')],
       schema: {
         description: 'Delete a custom classification (fails if categories are attached)',
         tags: ['Labor Categories'],
@@ -435,10 +439,11 @@ export const laborCategoryRoutes: FastifyPluginAsync = async (fastify) => {
     }
   );
 
-  // PUT /api/v1/labor-categories/classifications/rename (Admin only - backward compatibility)
+  // PUT /api/v1/labor-categories/classifications/rename
   fastify.put(
     '/classifications/rename',
     {
+      preHandler: [requirePermission('labor_categories.edit', 'labor_categories.manage')],
       schema: {
         description: 'Rename an entire classification across all assigned labor categories',
         tags: ['Labor Categories'],
@@ -455,9 +460,6 @@ export const laborCategoryRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const user = request.user!;
-      if (user.role !== UserRole.ADMIN) {
-        return reply.status(403).send(errorResponse('FORBIDDEN', 'Only administrators can rename classifications'));
-      }
 
       const body = request.body as { oldClassification: string; newClassification: string };
       const oldClassification = (body.oldClassification || '').trim();
@@ -539,19 +541,20 @@ export const laborCategoryRoutes: FastifyPluginAsync = async (fastify) => {
     }
   );
 
-  // POST /api/v1/labor-categories (Admin only)
+  // POST /api/v1/labor-categories
   fastify.post(
     '/',
     {
+      preHandler: [requirePermission('labor_categories.create')],
       schema: {
-        description: 'Create a new labor category with flexible classification',
+        description: 'Create a new labor category under a specified classification',
         tags: ['Labor Categories'],
         security: [{ bearerAuth: [] }],
         body: {
           type: 'object',
           required: ['name', 'categoryType'],
           properties: {
-            name: { type: 'string', minLength: 1, maxLength: 255 },
+            name: { type: 'string', minLength: 2, maxLength: 100 },
             categoryType: { type: 'string', minLength: 1, maxLength: 50 },
             orderIndex: { type: 'integer', minimum: 0 },
             isActive: { type: 'boolean' },
@@ -561,19 +564,6 @@ export const laborCategoryRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const user = request.user!;
-      const allowedRoles = [
-        UserRole.ADMIN,
-        UserRole.PROJECT_MANAGER,
-        UserRole.SITE_ENGINEER,
-        UserRole.SITE_SUPERVISOR,
-      ];
-      const hasPermission =
-        allowedRoles.includes(user.role as any) ||
-        ((user as any).permissions && (user as any).permissions.includes('labor_categories.manage'));
-
-      if (!hasPermission) {
-        return reply.status(403).send(errorResponse('FORBIDDEN', 'You do not have permission to create labor classifications or categories'));
-      }
 
       const body = request.body as {
         name: string;
@@ -652,10 +642,11 @@ export const laborCategoryRoutes: FastifyPluginAsync = async (fastify) => {
     }
   );
 
-  // PUT /api/v1/labor-categories/:id (Admin only)
-  fastify.put(
+  // PATCH /api/v1/labor-categories/:id
+  fastify.patch(
     '/:id',
     {
+      preHandler: [requirePermission('labor_categories.edit')],
       schema: {
         description: 'Update a labor category',
         tags: ['Labor Categories'],
@@ -663,14 +654,12 @@ export const laborCategoryRoutes: FastifyPluginAsync = async (fastify) => {
         params: {
           type: 'object',
           required: ['id'],
-          properties: {
-            id: { type: 'string', format: 'uuid' },
-          },
+          properties: { id: { type: 'string', format: 'uuid' } },
         },
         body: {
           type: 'object',
           properties: {
-            name: { type: 'string', minLength: 1, maxLength: 255 },
+            name: { type: 'string', minLength: 2, maxLength: 100 },
             categoryType: { type: 'string', minLength: 1, maxLength: 50 },
             orderIndex: { type: 'integer', minimum: 0 },
             isActive: { type: 'boolean' },
@@ -680,19 +669,6 @@ export const laborCategoryRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const user = request.user!;
-      const allowedRoles = [
-        UserRole.ADMIN,
-        UserRole.PROJECT_MANAGER,
-        UserRole.SITE_ENGINEER,
-        UserRole.SITE_SUPERVISOR,
-      ];
-      const hasPermission =
-        allowedRoles.includes(user.role as any) ||
-        ((user as any).permissions && (user as any).permissions.includes('labor_categories.manage'));
-
-      if (!hasPermission) {
-        return reply.status(403).send(errorResponse('FORBIDDEN', 'You do not have permission to update labor classifications or categories'));
-      }
 
       const { id } = request.params as { id: string };
       const body = request.body as {
@@ -798,29 +774,24 @@ export const laborCategoryRoutes: FastifyPluginAsync = async (fastify) => {
     }
   );
 
-  // DELETE /api/v1/labor-categories/:id (Admin only, safety checked)
+  // DELETE /api/v1/labor-categories/:id
   fastify.delete(
     '/:id',
     {
+      preHandler: [requirePermission('labor_categories.delete')],
       schema: {
-        description: 'Delete a labor category (rejects if historical reports reference it)',
+        description: 'Delete a labor category (historical reports preserve snapshot)',
         tags: ['Labor Categories'],
         security: [{ bearerAuth: [] }],
         params: {
           type: 'object',
           required: ['id'],
-          properties: {
-            id: { type: 'string', format: 'uuid' },
-          },
+          properties: { id: { type: 'string', format: 'uuid' } },
         },
       },
     },
     async (request, reply) => {
       const user = request.user!;
-      if (user.role !== UserRole.ADMIN) {
-        return reply.status(403).send(errorResponse('FORBIDDEN', 'Only administrators can delete labor categories'));
-      }
-
       const { id } = request.params as { id: string };
       const db = getDb();
 
@@ -854,6 +825,7 @@ export const laborCategoryRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.patch(
     '/:id/deactivate',
     {
+      preHandler: [requirePermission('labor_categories.edit')],
       schema: {
         description: 'Deactivate a labor category safely (preserves historical reports)',
         tags: ['Labor Categories'],
@@ -867,14 +839,6 @@ export const laborCategoryRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const user = request.user!;
-      const allowedRoles = [UserRole.ADMIN, UserRole.PROJECT_MANAGER, UserRole.SITE_ENGINEER, UserRole.SITE_SUPERVISOR];
-      const hasPermission =
-        allowedRoles.includes(user.role as any) ||
-        ((user as any).permissions && (user as any).permissions.includes('labor_categories.manage'));
-
-      if (!hasPermission) {
-        return reply.status(403).send(errorResponse('FORBIDDEN', 'Insufficient permissions to deactivate classifications'));
-      }
 
       const { id } = request.params as { id: string };
       const db = getDb();
@@ -907,6 +871,7 @@ export const laborCategoryRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.patch(
     '/:id/reactivate',
     {
+      preHandler: [requirePermission('labor_categories.edit')],
       schema: {
         description: 'Reactivate an inactive labor category',
         tags: ['Labor Categories'],
@@ -920,14 +885,6 @@ export const laborCategoryRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const user = request.user!;
-      const allowedRoles = [UserRole.ADMIN, UserRole.PROJECT_MANAGER, UserRole.SITE_ENGINEER, UserRole.SITE_SUPERVISOR];
-      const hasPermission =
-        allowedRoles.includes(user.role as any) ||
-        ((user as any).permissions && (user as any).permissions.includes('labor_categories.manage'));
-
-      if (!hasPermission) {
-        return reply.status(403).send(errorResponse('FORBIDDEN', 'Insufficient permissions to reactivate classifications'));
-      }
 
       const { id } = request.params as { id: string };
       const db = getDb();

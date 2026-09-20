@@ -20,7 +20,7 @@ export class ReportController {
     static async create(request, reply) {
         const input = createReportSchema.parse(request.body);
         try {
-            const report = await ReportService.createReport(input, request.user.id, request.user.role, request.ip, request.headers['user-agent']);
+            const report = await ReportService.createReport(input, request.user, request.ip, request.headers['user-agent']);
             return reply.status(201).send(successResponse(report, 'Report created successfully'));
         }
         catch (err) {
@@ -30,7 +30,7 @@ export class ReportController {
     static async submit(request, reply) {
         const { id } = request.params;
         try {
-            const report = await ReportService.submitReport(id, request.user.id, request.user.role, request.ip, request.headers['user-agent']);
+            const report = await ReportService.submitReport(id, request.user, request.ip, request.headers['user-agent']);
             return reply.send(successResponse(report, 'Report submitted successfully'));
         }
         catch (err) {
@@ -99,7 +99,7 @@ export class ReportController {
     static async update(request, reply) {
         const { id } = request.params;
         try {
-            const updated = await ReportService.updateReport(id, request.body, request.user.id, request.user.role, request.ip, request.headers['user-agent']);
+            const updated = await ReportService.updateReport(id, request.body, request.user, request.ip, request.headers['user-agent']);
             return reply.send(successResponse(updated, 'Report updated successfully'));
         }
         catch (err) {
@@ -109,7 +109,7 @@ export class ReportController {
     static async delete(request, reply) {
         const { id } = request.params;
         try {
-            const result = await ReportService.deleteReport(id, request.user.id, request.user.role, request.ip, request.headers['user-agent']);
+            const result = await ReportService.deleteReport(id, request.user, request.ip, request.headers['user-agent']);
             return reply.send(successResponse(result, 'Report deleted successfully'));
         }
         catch (err) {

@@ -1,71 +1,18 @@
 import { authenticate } from '../../middleware/auth.js';
-import { requireRoles } from '../../middleware/rbac.js';
+import { requirePermission } from '../../middleware/rbac.js';
 import { getDb } from '../../database/connection.js';
 import { roles } from '../../database/schema/roles.js';
 import { users } from '../../database/schema/users.js';
 import { successResponse, errorResponse } from '../../utils/response.js';
 import { recordAudit } from '../audit/service.js';
-import { AuditAction, UserRole } from '../../config/constants.js';
+import { AuditAction } from '../../config/constants.js';
+import { PERMISSION_REGISTRY, isValidPermission } from '../../config/permissions.js';
 import { eq, sql, desc, asc } from 'drizzle-orm';
-export const PERMISSION_CATALOG = [
-    {
-        module: 'Reports',
-        description: 'Daily construction site logs and trade attendance',
-        permissions: [
-            { id: 'reports.view', label: 'View Reports', description: 'Browse and view submitted daily site reports' },
-            { id: 'reports.create', label: 'Create Reports', description: 'Create and author new daily draft reports' },
-            { id: 'reports.review', label: 'Review Reports', description: 'Move reports to Under Review state' },
-            { id: 'reports.approve', label: 'Approve Reports', description: 'Grant final approval to submitted reports' },
-            { id: 'reports.reject', label: 'Reject Reports', description: 'Reject reports with required rejection feedback' },
-            { id: 'reports.delete', label: 'Delete Reports', description: 'Permanently remove reports from system' },
-            { id: 'reports.export', label: 'Export Reports', description: 'Export daily site logs to Excel or CSV' },
-        ],
-    },
-    {
-        module: 'Projects',
-        description: 'Construction projects and master records',
-        permissions: [
-            { id: 'projects.view', label: 'View Projects', description: 'Browse projects list and details' },
-            { id: 'projects.manage', label: 'Manage Projects', description: 'Create, modify, archive, and delete projects' },
-        ],
-    },
-    {
-        module: 'Sites',
-        description: 'Individual work locations and job sites',
-        permissions: [
-            { id: 'sites.view', label: 'View Sites', description: 'Browse sites list and site details' },
-            { id: 'sites.manage', label: 'Manage Sites', description: 'Create, edit, and delete job sites' },
-        ],
-    },
-    {
-        module: 'Users & Team',
-        description: 'User access, credentials, and site assignments',
-        permissions: [
-            { id: 'users.view', label: 'View Users', description: 'View staff directory and assignments' },
-            { id: 'users.manage', label: 'Manage Users', description: 'Provision users, change roles, assign sites and delete accounts' },
-        ],
-    },
-    {
-        module: 'Labor Categories',
-        description: 'Trade classifications and labor rate masters',
-        permissions: [
-            { id: 'labor_categories.view', label: 'View Labor Categories', description: 'Inspect available trades and classifications' },
-            { id: 'labor_categories.manage', label: 'Manage Labor Categories', description: 'Create, edit, rename, and organize trades & classifications' },
-        ],
-    },
-    {
-        module: 'System & Audits',
-        description: 'Security logs, platform health, and configuration',
-        permissions: [
-            { id: 'settings.view', label: 'View Settings & Audits', description: 'Access audit trail, export logs, and platform settings' },
-        ],
-    },
-];
 export const roleRoutes = async (fastify) => {
     fastify.addHook('preHandler', authenticate);
     // 1. GET /api/v1/roles/permissions - Catalog of permissions
     fastify.get('/permissions', async (_req, reply) => {
-        return reply.send(successResponse(PERMISSION_CATALOG, 'Permissions catalog retrieved successfully'));
+        return reply.send(successResponse(PERMISSION_REGISTRY, 'Permissions catalog retrieved successfully'));
     });
     // 2. GET /api/v1/roles - List all roles with user count
     fastify.get('/', async (_req, reply) => {
@@ -122,9 +69,9 @@ export const roleRoutes = async (fastify) => {
         }
         return reply.send(successResponse(role, 'Role retrieved successfully'));
     });
-    // 4. POST /api/v1/roles - Create custom role (Admin only)
+    // 4. POST /api/v1/roles - Create custom role
     fastify.post('/', {
-        preHandler: [requireRoles(UserRole.ADMIN)],
+        preHandler: [requirePermission('roles.create')],
         schema: {
             body: {
                 type: 'object',
@@ -159,6 +106,11 @@ export const roleRoutes = async (fastify) => {
             return reply.status(409).send(errorResponse('ROLE_EXISTS', `A role with identifier "${slug}" already exists`));
         }
         const permissions = Array.isArray(body.permissions) ? body.permissions : [];
+        for (const p of permissions) {
+            if (!isValidPermission(p)) {
+                return reply.status(400).send(errorResponse('INVALID_PERMISSION', `Unknown permission identifier: "${p}"`));
+            }
+        }
         const [newRole] = await db
             .insert(roles)
             .values({
@@ -180,9 +132,9 @@ export const roleRoutes = async (fastify) => {
         });
         return reply.status(201).send(successResponse(newRole, 'Custom role created successfully'));
     });
-    // 5. PUT /api/v1/roles/:id - Update role (Admin only)
+    // 5. PUT /api/v1/roles/:id - Update role
     fastify.put('/:id', {
-        preHandler: [requireRoles(UserRole.ADMIN)],
+        preHandler: [requirePermission('roles.edit')],
         schema: {
             params: {
                 type: 'object',
@@ -221,6 +173,11 @@ export const roleRoutes = async (fastify) => {
             updateData.description = body.description.trim() || null;
         }
         if (body.permissions !== undefined) {
+            for (const p of body.permissions) {
+                if (!isValidPermission(p)) {
+                    return reply.status(400).send(errorResponse('INVALID_PERMISSION', `Unknown permission identifier: "${p}"`));
+                }
+            }
             updateData.permissions = body.permissions;
         }
         // Slug can be modified
@@ -249,9 +206,9 @@ export const roleRoutes = async (fastify) => {
         });
         return reply.send(successResponse(updated, 'Role updated successfully'));
     });
-    // 6. DELETE /api/v1/roles/:id - Delete role (Admin only)
+    // 6. DELETE /api/v1/roles/:id - Delete role
     fastify.delete('/:id', {
-        preHandler: [requireRoles(UserRole.ADMIN)],
+        preHandler: [requirePermission('roles.delete')],
         schema: {
             params: {
                 type: 'object',
