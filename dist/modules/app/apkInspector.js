@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import crypto from 'node:crypto';
-import ApkReader from 'adbkit-apkreader';
 import { env } from '../../config/env.js';
 import { logger } from '../../utils/logger.js';
 /**
@@ -23,6 +22,14 @@ export async function inspectApk(filePath) {
     // 1. Inspect actual APK using adbkit-apkreader
     let manifest;
     try {
+        let ApkReader;
+        try {
+            const ApkReaderModule = await import('adbkit-apkreader');
+            ApkReader = ApkReaderModule.default || ApkReaderModule;
+        }
+        catch {
+            throw new Error('adbkit-apkreader is not installed on this server. Run "npm install" on the server.');
+        }
         const reader = await ApkReader.open(filePath);
         manifest = await reader.readManifest();
     }

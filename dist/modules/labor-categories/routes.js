@@ -87,7 +87,23 @@ export const laborCategoryRoutes = async (fastify) => {
             .orderBy(asc(laborClassifications.isSystem), asc(laborClassifications.name));
         return reply.send(successResponse(classifications, 'Labor classifications retrieved successfully'));
     });
-    // POST /api/v1/labor-categories/classifications (Admin only)
+    async function hasClassificationManagePermission(user) {
+        if (user.role === UserRole.ADMIN)
+            return true;
+        try {
+            const db = getDb();
+            const { roles } = await import('../../database/schema/roles.js');
+            const [userRole] = await db.select().from(roles).where(eq(roles.slug, user.role)).limit(1);
+            if (userRole && Array.isArray(userRole.permissions)) {
+                return userRole.permissions.includes('labor_categories.manage');
+            }
+        }
+        catch {
+            // fallback
+        }
+        return false;
+    }
+    // POST /api/v1/labor-categories/classifications (Admin / Manage Permission)
     fastify.post('/classifications', {
         schema: {
             description: 'Create a new labor category classification',
@@ -105,8 +121,8 @@ export const laborCategoryRoutes = async (fastify) => {
         },
     }, async (request, reply) => {
         const user = request.user;
-        if (user.role !== UserRole.ADMIN) {
-            return reply.status(403).send(errorResponse('FORBIDDEN', 'Only administrators can create classifications'));
+        if (!(await hasClassificationManagePermission(user))) {
+            return reply.status(403).send(errorResponse('FORBIDDEN', 'Insufficient permissions to create classifications'));
         }
         const body = request.body;
         const name = body.name.trim();
@@ -165,8 +181,8 @@ export const laborCategoryRoutes = async (fastify) => {
         },
     }, async (request, reply) => {
         const user = request.user;
-        if (user.role !== UserRole.ADMIN) {
-            return reply.status(403).send(errorResponse('FORBIDDEN', 'Only administrators can update classifications'));
+        if (!(await hasClassificationManagePermission(user))) {
+            return reply.status(403).send(errorResponse('FORBIDDEN', 'Insufficient permissions to update classifications'));
         }
         const { code } = request.params;
         const body = request.body;
@@ -245,8 +261,8 @@ export const laborCategoryRoutes = async (fastify) => {
         },
     }, async (request, reply) => {
         const user = request.user;
-        if (user.role !== UserRole.ADMIN) {
-            return reply.status(403).send(errorResponse('FORBIDDEN', 'Only administrators can delete classifications'));
+        if (!(await hasClassificationManagePermission(user))) {
+            return reply.status(403).send(errorResponse('FORBIDDEN', 'Insufficient permissions to delete classifications'));
         }
         const { code } = request.params;
         const { cascade } = request.query || {};

@@ -2,7 +2,6 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
-import multipart from '@fastify/multipart';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import { env } from './config/env.js';
@@ -58,13 +57,20 @@ export async function buildApp() {
         max: env.RATE_LIMIT_MAX,
         timeWindow: env.RATE_LIMIT_WINDOW_MS,
     });
-    // 3.1 Multipart support for APK uploads
-    await app.register(multipart, {
-        limits: {
-            fileSize: env.MAX_APK_SIZE_MB * 1024 * 1024,
-            files: 1,
-        },
-    });
+    // 3.1 Multipart support for APK uploads (gracefully handled if npm install pending)
+    try {
+        const multipartModule = await import('@fastify/multipart');
+        const multipart = multipartModule.default || multipartModule;
+        await app.register(multipart, {
+            limits: {
+                fileSize: env.MAX_APK_SIZE_MB * 1024 * 1024,
+                files: 1,
+            },
+        });
+    }
+    catch (err) {
+        logger.warn('[APP] @fastify/multipart not found or failed to load. Run "npm install" on server to enable APK file uploads.');
+    }
     // Ensure APK storage directory exists on disk
     AppUpdateService.ensureStorageDir();
     // 4. OpenAPI / Swagger Documentation

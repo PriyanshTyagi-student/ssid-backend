@@ -193,6 +193,9 @@ export const appVersionRoutes = async (fastify) => {
         }, async (request, reply) => {
             const user = request.user;
             // Handle multipart data
+            if (typeof request.file !== 'function') {
+                return reply.status(503).send(errorResponse('SERVICE_UNAVAILABLE', '@fastify/multipart is not installed on this server. Run "npm install" on the server to enable uploads.'));
+            }
             const data = await request.file();
             if (!data) {
                 return reply.status(400).send(errorResponse('BAD_REQUEST', 'No APK file uploaded. Use field name "apk" or "file".'));
