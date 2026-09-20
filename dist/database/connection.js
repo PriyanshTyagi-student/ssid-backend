@@ -38,6 +38,15 @@ export async function initDatabase() {
         if (!fs.existsSync(dataDir)) {
             fs.mkdirSync(dataDir, { recursive: true });
         }
+        else {
+            const files = fs.readdirSync(dataDir);
+            if (files.length > 0 && !fs.existsSync(path.join(dataDir, 'PG_VERSION'))) {
+                logger.warn(`[DATABASE] Directory ${dataDir} has files but is missing PG_VERSION. Backing up incomplete state...`);
+                const backup = `${dataDir}_incomplete_${Date.now()}`;
+                fs.renameSync(dataDir, backup);
+                fs.mkdirSync(dataDir, { recursive: true });
+            }
+        }
         logger.info(`[DATABASE] Initializing embedded PostgreSQL (PGLite) at ${dataDir}...`);
         const staleFiles = ['postmaster.pid', '.s.PGSQL.5432.lock', '.s.PGSQL.5432.lock.out'];
         for (const file of staleFiles) {
@@ -52,8 +61,21 @@ export async function initDatabase() {
                 }
             }
         }
-        const pglite = new PGlite(dataDir);
-        await pglite.waitReady;
+        let pglite;
+        try {
+            pglite = new PGlite(dataDir);
+            await pglite.waitReady;
+        }
+        catch (err) {
+            logger.error({ err }, `[DATABASE] PGlite failed to load at ${dataDir}. Backing up corrupted data...`);
+            const backup = `${dataDir}_corrupted_${Date.now()}`;
+            if (fs.existsSync(dataDir)) {
+                fs.renameSync(dataDir, backup);
+                fs.mkdirSync(dataDir, { recursive: true });
+            }
+            pglite = new PGlite(dataDir);
+            await pglite.waitReady;
+        }
         isConnected = true;
         logger.info('[DATABASE] Embedded PostgreSQL is ready');
         rawClient = pglite;
