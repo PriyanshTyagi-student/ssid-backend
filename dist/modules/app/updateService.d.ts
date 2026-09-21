@@ -21,6 +21,8 @@ export declare class AppUpdateService {
         tempFilePath: string;
         precomputedSha256?: string;
         precomputedSize?: number;
+        versionName?: string;
+        versionCode?: number;
         releaseNotes?: string;
         mandatory?: boolean;
         userId: string;
@@ -30,6 +32,17 @@ export declare class AppUpdateService {
      * Archives any currently published release and sets the target release as published.
      */
     static publishRelease(id: string, userId: string): Promise<AppRelease>;
+    /**
+     * Update metadata of an existing release (published, draft, or archived).
+     * Supports updating versionName, versionCode, releaseNotes, and mandatory flag.
+     * If versionName changes, the stored APK file on disk is renamed accordingly.
+     */
+    static updateRelease(id: string, updates: {
+        versionName?: string;
+        versionCode?: number;
+        releaseNotes?: string | null;
+        mandatory?: boolean;
+    }): Promise<AppRelease>;
     /**
      * Archive a release.
      */

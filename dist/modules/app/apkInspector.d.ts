@@ -8,10 +8,13 @@ export interface InspectedApk {
 export interface InspectApkOptions {
     precomputedSha256?: string;
     precomputedSize?: number;
+    overrideVersionName?: string;
+    overrideVersionCode?: number;
 }
 /**
  * Validates and inspects an uploaded APK file.
- * Extracts the authoritative package name, versionName, and versionCode from AndroidManifest.xml.
+ * Extracts the authoritative package name, versionName, and versionCode from AndroidManifest.xml,
+ * or applies explicit overrides when provided by an administrator.
  * Computes exact SHA-256 checksum and file size (skips redundant disk re-reads if precomputed).
  */
 export declare function inspectApk(filePath: string, options?: InspectApkOptions): Promise<InspectedApk>;

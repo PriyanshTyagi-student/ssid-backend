@@ -43,10 +43,12 @@ export class AppUpdateService {
      */
     static async createDraftRelease(params) {
         this.ensureStorageDir();
-        // 1. Inspect APK package: extract versionName, versionCode, package, SHA-256
+        // 1. Inspect APK package: extract versionName, versionCode, package, SHA-256 (or apply manual overrides)
         const inspected = await inspectApk(params.tempFilePath, {
             precomputedSha256: params.precomputedSha256,
             precomputedSize: params.precomputedSize,
+            overrideVersionName: params.versionName,
+            overrideVersionCode: params.versionCode,
         });
         // 2. Build sanitized target filename
         const safeVersion = inspected.versionName.replace(/[^a-zA-Z0-9.-]/g, '_');
@@ -130,6 +132,60 @@ export class AppUpdateService {
         const [published] = await db.select().from(appReleases).where(eq(appReleases.id, id));
         logger.info({ releaseId: id, version: target.versionName, code: target.versionCode, publishedBy: userId }, '[APK_UPDATE] Successfully published release');
         return published;
+    }
+    /**
+     * Update metadata of an existing release (published, draft, or archived).
+     * Supports updating versionName, versionCode, releaseNotes, and mandatory flag.
+     * If versionName changes, the stored APK file on disk is renamed accordingly.
+     */
+    static async updateRelease(id, updates) {
+        const db = getDb();
+        const [target] = await db.select().from(appReleases).where(eq(appReleases.id, id));
+        if (!target) {
+            throw new Error('Release not found');
+        }
+        const patch = {
+            updatedAt: new Date(),
+        };
+        if (updates.releaseNotes !== undefined) {
+            patch.releaseNotes = updates.releaseNotes?.trim() || null;
+        }
+        if (updates.mandatory !== undefined) {
+            patch.mandatory = Boolean(updates.mandatory);
+        }
+        if (updates.versionCode !== undefined && updates.versionCode !== null) {
+            const code = Number(updates.versionCode);
+            if (!Number.isInteger(code) || code < 1) {
+                throw new Error('Build number (version code) must be a positive integer >= 1.');
+            }
+            patch.versionCode = code;
+        }
+        if (updates.versionName !== undefined && updates.versionName.trim()) {
+            const newVersionName = updates.versionName.trim();
+            patch.versionName = newVersionName;
+            if (newVersionName !== target.versionName) {
+                const safeVersion = newVersionName.replace(/[^a-zA-Z0-9.-]/g, '_');
+                const newFilename = `ssid-v${safeVersion}.apk`;
+                const oldFilePath = this.getSafePath(target.filename);
+                const newFilePath = this.getSafePath(newFilename);
+                if (fs.existsSync(oldFilePath) && oldFilePath !== newFilePath) {
+                    try {
+                        await fs.promises.rename(oldFilePath, newFilePath);
+                    }
+                    catch (err) {
+                        logger.warn({ err, oldFilePath, newFilePath }, '[APK_UPDATE] Could not rename APK file on disk');
+                    }
+                }
+                patch.filename = newFilename;
+            }
+        }
+        const [updated] = await db
+            .update(appReleases)
+            .set(patch)
+            .where(eq(appReleases.id, id))
+            .returning();
+        logger.info({ releaseId: id, updates: patch }, '[APK_UPDATE] Successfully updated release metadata');
+        return updated;
     }
     /**
      * Archive a release.

@@ -227,6 +227,8 @@ export const appVersionRoutes = async (fastify) => {
                 const fields = data.fields;
                 let releaseNotes;
                 let mandatory = false;
+                let versionName;
+                let versionCode;
                 if (fields) {
                     if (fields.releaseNotes && typeof fields.releaseNotes.value === 'string') {
                         releaseNotes = fields.releaseNotes.value;
@@ -235,12 +237,27 @@ export const appVersionRoutes = async (fastify) => {
                         const val = fields.mandatory.value;
                         mandatory = val === true || val === 'true' || val === '1';
                     }
+                    if (fields.versionName && typeof fields.versionName.value === 'string') {
+                        const trimmed = fields.versionName.value.trim();
+                        if (trimmed) {
+                            versionName = trimmed;
+                        }
+                    }
+                    if (fields.versionCode) {
+                        const rawVal = fields.versionCode.value;
+                        const parsed = typeof rawVal === 'string' ? parseInt(rawVal, 10) : Number(rawVal);
+                        if (!isNaN(parsed) && parsed > 0) {
+                            versionCode = parsed;
+                        }
+                    }
                 }
                 // Create draft release with instant atomic rename & precomputed hash/size
                 const draft = await AppUpdateService.createDraftRelease({
                     tempFilePath: stagingFilePath,
                     precomputedSha256: computedSha256,
                     precomputedSize: uploadedBytes,
+                    versionName,
+                    versionCode,
                     releaseNotes,
                     mandatory,
                     userId: user.id,
@@ -355,6 +372,58 @@ export const appVersionRoutes = async (fastify) => {
             }
             catch (err) {
                 return reply.status(400).send(errorResponse('ARCHIVE_FAILED', err?.message || 'Failed to archive release'));
+            }
+        });
+        /**
+         * PATCH /api/v1/app/updates/:id
+         * Update metadata of an existing application release (published, draft, or archived).
+         */
+        adminRouter.patch('/updates/:id', {
+            preHandler: [requirePermission('app_updates.publish', 'app_updates.upload')],
+            schema: {
+                description: 'Update metadata for an application release (published, draft, or archived)',
+                tags: ['App Updates'],
+                security: [{ bearerAuth: [] }],
+                params: {
+                    type: 'object',
+                    required: ['id'],
+                    properties: { id: { type: 'string' } },
+                },
+                body: {
+                    type: 'object',
+                    properties: {
+                        versionName: { type: 'string' },
+                        versionCode: { type: 'integer', minimum: 1 },
+                        releaseNotes: { type: 'string', nullable: true },
+                        mandatory: { type: 'boolean' },
+                    },
+                },
+            },
+        }, async (request, reply) => {
+            const { id } = request.params;
+            const body = request.body;
+            const user = request.user;
+            try {
+                const updated = await AppUpdateService.updateRelease(id, body);
+                await recordAudit({
+                    userId: user.id,
+                    action: AuditAction.APP_UPDATE_UPDATED,
+                    entityType: 'app_release',
+                    entityId: updated.id,
+                    metadata: {
+                        versionName: updated.versionName,
+                        versionCode: updated.versionCode,
+                        mandatory: updated.mandatory,
+                        status: updated.status,
+                    },
+                    ipAddress: request.ip,
+                    userAgent: request.headers['user-agent'],
+                });
+                return reply.send(successResponse(updated, `Release ${updated.versionName} updated successfully`));
+            }
+            catch (err) {
+                logger.error({ err, releaseId: id }, '[APK_UPDATE] Failed to update release');
+                return reply.status(400).send(errorResponse('UPDATE_FAILED', err?.message || 'Failed to update release'));
             }
         });
         /**

@@ -14,11 +14,14 @@ export interface InspectedApk {
 export interface InspectApkOptions {
   precomputedSha256?: string;
   precomputedSize?: number;
+  overrideVersionName?: string;
+  overrideVersionCode?: number;
 }
 
 /**
  * Validates and inspects an uploaded APK file.
- * Extracts the authoritative package name, versionName, and versionCode from AndroidManifest.xml.
+ * Extracts the authoritative package name, versionName, and versionCode from AndroidManifest.xml,
+ * or applies explicit overrides when provided by an administrator.
  * Computes exact SHA-256 checksum and file size (skips redundant disk re-reads if precomputed).
  */
 export async function inspectApk(filePath: string, options?: InspectApkOptions): Promise<InspectedApk> {
@@ -63,13 +66,18 @@ export async function inspectApk(filePath: string, options?: InspectApkOptions):
     throw new Error(`Package name mismatch: Expected "${expectedPackage}", but uploaded APK has package "${packageName}"`);
   }
 
-  const rawVersionName = manifest.versionName != null ? String(manifest.versionName).trim() : '';
-  if (!rawVersionName) {
-    throw new Error('APK does not define a valid versionName in AndroidManifest.xml');
+  // Resolve Version Name (prefer explicit override, fallback to manifest)
+  const finalVersionName = options?.overrideVersionName?.trim() ||
+    (manifest.versionName != null ? String(manifest.versionName).trim() : '');
+  if (!finalVersionName) {
+    throw new Error('APK does not define a valid versionName in AndroidManifest.xml, and no Version Number was provided.');
   }
 
-  const rawVersionCode = Number(manifest.versionCode);
-  if (!Number.isInteger(rawVersionCode) || rawVersionCode < 1) {
+  // Resolve Version Code / Build Number (prefer explicit override, fallback to manifest)
+  const finalVersionCode = options?.overrideVersionCode != null && options.overrideVersionCode > 0
+    ? options.overrideVersionCode
+    : Number(manifest.versionCode);
+  if (!Number.isInteger(finalVersionCode) || finalVersionCode < 1) {
     throw new Error(`APK defines an invalid versionCode: "${manifest.versionCode}". Must be an integer >= 1.`);
   }
 
@@ -87,8 +95,8 @@ export async function inspectApk(filePath: string, options?: InspectApkOptions):
 
   return {
     packageName,
-    versionName: rawVersionName,
-    versionCode: rawVersionCode,
+    versionName: finalVersionName,
+    versionCode: finalVersionCode,
     fileSize,
     sha256,
   };

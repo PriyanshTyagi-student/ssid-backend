@@ -58,4 +58,66 @@ describe('App Updates Optimized Fast Upload Pipeline', () => {
     expect(inspected.packageName).toBe('com.ssid.ssid_app');
     expect(inspected.sha256).toMatch(/^[a-f0-9]{64}$/);
   });
+
+  it('inspectApk respects custom overrideVersionName and overrideVersionCode when specified', async () => {
+    const existingApkPath = path.resolve(process.cwd(), 'data/apks/ssid-v1.0.0.apk');
+    if (!fs.existsSync(existingApkPath)) {
+      return;
+    }
+
+    const inspected = await inspectApk(existingApkPath, {
+      overrideVersionName: '2.5.0-custom',
+      overrideVersionCode: 99,
+    });
+
+    expect(inspected.versionName).toBe('2.5.0-custom');
+    expect(inspected.versionCode).toBe(99);
+    expect(inspected.packageName).toBe('com.ssid.ssid_app');
+  });
+
+  it('updateRelease updates versionName, versionCode, releaseNotes, and mandatory flag', async () => {
+    const published = await AppUpdateService.getPublishedRelease();
+    if (!published) {
+      // If none published, list releases or skip
+      const releases = await AppUpdateService.listReleases();
+      if (releases.length === 0) return;
+      const target = releases[0];
+      const updated = await AppUpdateService.updateRelease(target.id, {
+        versionName: '1.9.9-test',
+        versionCode: 88,
+        releaseNotes: 'Updated release notes test',
+        mandatory: true,
+      });
+      expect(updated.versionName).toBe('1.9.9-test');
+      expect(updated.versionCode).toBe(88);
+      expect(updated.releaseNotes).toBe('Updated release notes test');
+      expect(updated.mandatory).toBe(true);
+      return;
+    }
+
+    const originalVersionName = published.versionName;
+    const originalVersionCode = published.versionCode;
+
+    // Update published release
+    const updated = await AppUpdateService.updateRelease(published.id, {
+      versionName: `${originalVersionName}-edit`,
+      versionCode: originalVersionCode + 1,
+      releaseNotes: 'Edited live release notes',
+      mandatory: true,
+    });
+
+    expect(updated.id).toBe(published.id);
+    expect(updated.versionName).toBe(`${originalVersionName}-edit`);
+    expect(updated.versionCode).toBe(originalVersionCode + 1);
+    expect(updated.releaseNotes).toBe('Edited live release notes');
+    expect(updated.mandatory).toBe(true);
+
+    // Revert back for consistency
+    await AppUpdateService.updateRelease(published.id, {
+      versionName: originalVersionName,
+      versionCode: originalVersionCode,
+      releaseNotes: published.releaseNotes,
+      mandatory: published.mandatory,
+    });
+  });
 });
