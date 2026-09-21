@@ -161,6 +161,8 @@ export async function runMigrations() {
 
     ALTER TABLE labor_categories ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES users(id);
     ALTER TABLE labor_categories ADD COLUMN IF NOT EXISTS updated_by UUID REFERENCES users(id);
+    ALTER TABLE labor_categories ADD COLUMN IF NOT EXISTS name_en VARCHAR(150);
+    ALTER TABLE labor_categories ADD COLUMN IF NOT EXISTS name_hi VARCHAR(150);
 
     CREATE UNIQUE INDEX IF NOT EXISTS labor_cat_type_name_uniq_idx ON labor_categories (category_type, name);
     CREATE INDEX IF NOT EXISTS labor_cat_type_idx ON labor_categories (category_type);

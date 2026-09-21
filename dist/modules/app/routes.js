@@ -1,6 +1,6 @@
 import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
+import crypto from 'node:crypto';
+import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { authenticate } from '../../middleware/auth.js';
 import { requirePermission } from '../../middleware/rbac.js';
@@ -206,10 +206,23 @@ export const appVersionRoutes = async (fastify) => {
             if (!originalName.toLowerCase().endsWith('.apk')) {
                 return reply.status(400).send(errorResponse('INVALID_FILE_TYPE', 'Only .apk files are supported'));
             }
-            // Save uploaded stream to temporary file for inspection
-            const tempFilePath = path.join(os.tmpdir(), `upload_${Date.now()}_${path.basename(originalName)}`);
+            // Create staging file directly inside storage directory for zero-copy atomic rename
+            const stagingFilePath = AppUpdateService.createStagingFilePath(originalName);
             try {
-                await pipeline(data.file, fs.createWriteStream(tempFilePath));
+                // Concurrently compute SHA-256 and total bytes in-flight while streaming from client
+                const hash = crypto.createHash('sha256');
+                let uploadedBytes = 0;
+                const hashTransform = new Transform({
+                    transform(chunk, _encoding, callback) {
+                        hash.update(chunk);
+                        uploadedBytes += chunk.length;
+                        callback(null, chunk);
+                    },
+                });
+                // 2MB highWaterMark buffer to maximize disk write throughput
+                const writeStream = fs.createWriteStream(stagingFilePath, { highWaterMark: 2 * 1024 * 1024 });
+                await pipeline(data.file, hashTransform, writeStream);
+                const computedSha256 = hash.digest('hex');
                 // Extract non-file fields if provided
                 const fields = data.fields;
                 let releaseNotes;
@@ -223,9 +236,11 @@ export const appVersionRoutes = async (fastify) => {
                         mandatory = val === true || val === 'true' || val === '1';
                     }
                 }
-                // Create draft release with validation & extraction
+                // Create draft release with instant atomic rename & precomputed hash/size
                 const draft = await AppUpdateService.createDraftRelease({
-                    tempFilePath,
+                    tempFilePath: stagingFilePath,
+                    precomputedSha256: computedSha256,
+                    precomputedSize: uploadedBytes,
                     releaseNotes,
                     mandatory,
                     userId: user.id,
@@ -250,10 +265,10 @@ export const appVersionRoutes = async (fastify) => {
                 return reply.status(201).send(successResponse(draft, 'APK uploaded and validated successfully as a draft release'));
             }
             catch (err) {
-                // Clean up temp file if still present
-                if (fs.existsSync(tempFilePath)) {
+                // Clean up staging file if still present
+                if (fs.existsSync(stagingFilePath)) {
                     try {
-                        fs.unlinkSync(tempFilePath);
+                        await fs.promises.unlink(stagingFilePath);
                     }
                     catch (_) { }
                 }

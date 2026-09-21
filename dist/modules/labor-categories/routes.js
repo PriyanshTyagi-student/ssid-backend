@@ -49,6 +49,8 @@ export const laborCategoryRoutes = async (fastify) => {
             .select({
             id: laborCategories.id,
             name: laborCategories.name,
+            nameEn: laborCategories.nameEn,
+            nameHi: laborCategories.nameHi,
             categoryType: laborCategories.categoryType,
             orderIndex: laborCategories.orderIndex,
             isActive: laborCategories.isActive,
@@ -423,9 +425,11 @@ export const laborCategoryRoutes = async (fastify) => {
             security: [{ bearerAuth: [] }],
             body: {
                 type: 'object',
-                required: ['name', 'categoryType'],
+                required: ['categoryType'],
                 properties: {
-                    name: { type: 'string', minLength: 2, maxLength: 100 },
+                    name: { type: 'string', maxLength: 255 },
+                    nameEn: { type: 'string', maxLength: 150 },
+                    nameHi: { type: 'string', maxLength: 150 },
                     categoryType: { type: 'string', minLength: 1, maxLength: 50 },
                     orderIndex: { type: 'integer', minimum: 0 },
                     isActive: { type: 'boolean' },
@@ -435,10 +439,15 @@ export const laborCategoryRoutes = async (fastify) => {
     }, async (request, reply) => {
         const user = request.user;
         const body = request.body;
-        const name = body.name.trim();
+        const nameEn = body.nameEn?.trim() || '';
+        const nameHi = body.nameHi?.trim() || '';
+        let name = body.name?.trim() || '';
+        if (!name && nameEn) {
+            name = nameHi ? `${nameEn} (${nameHi})` : nameEn;
+        }
         const categoryType = body.categoryType.trim();
         if (!name) {
-            return reply.status(400).send(errorResponse('BAD_REQUEST', 'Category name cannot be empty'));
+            return reply.status(400).send(errorResponse('BAD_REQUEST', 'Category name or English name cannot be empty'));
         }
         if (!categoryType) {
             return reply.status(400).send(errorResponse('BAD_REQUEST', 'Category classification cannot be empty'));
@@ -469,6 +478,8 @@ export const laborCategoryRoutes = async (fastify) => {
             .insert(laborCategories)
             .values({
             name,
+            nameEn: nameEn || name,
+            nameHi: nameHi || null,
             categoryType,
             orderIndex,
             isActive: body.isActive !== undefined ? body.isActive : true,
@@ -483,6 +494,8 @@ export const laborCategoryRoutes = async (fastify) => {
             entityId: newCategory.id,
             metadata: {
                 name: newCategory.name,
+                nameEn: newCategory.nameEn,
+                nameHi: newCategory.nameHi,
                 categoryType: newCategory.categoryType,
                 orderIndex: newCategory.orderIndex,
             },
@@ -506,7 +519,9 @@ export const laborCategoryRoutes = async (fastify) => {
             body: {
                 type: 'object',
                 properties: {
-                    name: { type: 'string', minLength: 2, maxLength: 100 },
+                    name: { type: 'string', maxLength: 255 },
+                    nameEn: { type: 'string', maxLength: 150 },
+                    nameHi: { type: 'string', maxLength: 150 },
                     categoryType: { type: 'string', minLength: 1, maxLength: 50 },
                     orderIndex: { type: 'integer', minimum: 0 },
                     isActive: { type: 'boolean' },
@@ -526,7 +541,16 @@ export const laborCategoryRoutes = async (fastify) => {
             updatedAt: new Date(),
             updatedBy: user.id,
         };
-        if (body.name !== undefined) {
+        if (body.nameEn !== undefined || body.nameHi !== undefined) {
+            const finalNameEn = body.nameEn !== undefined ? body.nameEn.trim() : (category.nameEn || '');
+            const finalNameHi = body.nameHi !== undefined ? body.nameHi.trim() : (category.nameHi || '');
+            updateData.nameEn = finalNameEn || null;
+            updateData.nameHi = finalNameHi || null;
+            if (finalNameEn) {
+                updateData.name = finalNameHi ? `${finalNameEn} (${finalNameHi})` : finalNameEn;
+            }
+        }
+        if (body.name !== undefined && body.nameEn === undefined) {
             const trimmed = body.name.trim();
             if (!trimmed) {
                 return reply.status(400).send(errorResponse('BAD_REQUEST', 'Category name cannot be empty'));

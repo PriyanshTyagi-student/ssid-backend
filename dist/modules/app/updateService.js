@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { eq, desc } from 'drizzle-orm';
 import { getDb } from '../../database/connection.js';
 import { appReleases, AppReleaseStatus } from '../../database/schema/app_releases.js';
@@ -18,11 +19,20 @@ export class AppUpdateService {
         }
     }
     /**
+     * Generates a temporary staging file path directly inside the APK storage directory.
+     * This enables instant atomic filesystem rename upon upload completion without copying.
+     */
+    static createStagingFilePath(originalFilename) {
+        this.ensureStorageDir();
+        const rand = crypto.randomBytes(6).toString('hex');
+        const safeName = path.basename(originalFilename).replace(/[^a-zA-Z0-9.-]/g, '_');
+        return path.join(this.storageDir, `.staging_${Date.now()}_${rand}_${safeName}`);
+    }
+    /**
      * Get safe absolute path within storage directory, preventing path traversal.
      */
     static getSafePath(filename) {
-        const baseName = path.basename(filename);
-        const resolved = path.resolve(this.storageDir, baseName);
+        const resolved = path.resolve(this.storageDir, filename);
         if (!resolved.startsWith(this.storageDir)) {
             throw new Error('Access denied: Path traversal detected');
         }
@@ -34,18 +44,30 @@ export class AppUpdateService {
     static async createDraftRelease(params) {
         this.ensureStorageDir();
         // 1. Inspect APK package: extract versionName, versionCode, package, SHA-256
-        const inspected = await inspectApk(params.tempFilePath);
+        const inspected = await inspectApk(params.tempFilePath, {
+            precomputedSha256: params.precomputedSha256,
+            precomputedSize: params.precomputedSize,
+        });
         // 2. Build sanitized target filename
         const safeVersion = inspected.versionName.replace(/[^a-zA-Z0-9.-]/g, '_');
         const filename = `ssid-v${safeVersion}.apk`;
         const targetPath = this.getSafePath(filename);
-        // 3. Move/copy APK to storage directory
+        // 3. Move/rename APK to storage directory (atomic rename without redundant copy)
         try {
             if (fs.existsSync(targetPath)) {
-                fs.unlinkSync(targetPath);
+                try {
+                    await fs.promises.unlink(targetPath);
+                }
+                catch (_) { }
             }
-            fs.copyFileSync(params.tempFilePath, targetPath);
-            fs.unlinkSync(params.tempFilePath);
+            try {
+                await fs.promises.rename(params.tempFilePath, targetPath);
+            }
+            catch {
+                // Fallback if cross-device
+                await fs.promises.copyFile(params.tempFilePath, targetPath);
+                await fs.promises.unlink(params.tempFilePath).catch(() => { });
+            }
         }
         catch (err) {
             logger.error({ err, targetPath }, '[APK_STORAGE] Failed to store APK file');

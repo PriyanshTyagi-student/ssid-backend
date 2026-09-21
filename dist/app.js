@@ -66,6 +66,8 @@ export async function buildApp() {
                 fileSize: env.MAX_APK_SIZE_MB * 1024 * 1024,
                 files: 1,
             },
+            // 2MB stream buffer to maximize throughput during large binary APK uploads
+            highWaterMark: 2 * 1024 * 1024,
         });
     }
     catch (err) {

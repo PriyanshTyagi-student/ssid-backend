@@ -72,6 +72,8 @@ export async function buildApp(): Promise<FastifyInstance<any, any, any, any>> {
         fileSize: env.MAX_APK_SIZE_MB * 1024 * 1024,
         files: 1,
       },
+      // 2MB stream buffer to maximize throughput during large binary APK uploads
+      highWaterMark: 2 * 1024 * 1024,
     });
   } catch (err: any) {
     logger.warn('[APP] @fastify/multipart not found or failed to load. Run "npm install" on server to enable APK file uploads.');

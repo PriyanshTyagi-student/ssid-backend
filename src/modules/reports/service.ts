@@ -3,6 +3,7 @@ import { reports, reportSections, reportEntries } from '../../database/schema/re
 import { sites } from '../../database/schema/sites.js';
 import { projects } from '../../database/schema/projects.js';
 import { users } from '../../database/schema/users.js';
+import { laborCategories } from '../../database/schema/labor_categories.js';
 import { userProjectAssignments, userSiteAssignments } from '../../database/schema/assignments.js';
 import { eq, and, desc, count, inArray, gte, lte } from 'drizzle-orm';
 import { generateReportNumber } from '../../utils/reportNumber.js';
@@ -13,6 +14,8 @@ import type { CreateReportInput, ListReportsQuery } from './schema.js';
 
 function validateAndNormalizeSections(sections: any[], reportType?: string) {
   if (!sections || !Array.isArray(sections)) return;
+
+  const seenClassifications = new Set<string>();
 
   for (const sec of sections) {
     if (!sec.entries || !Array.isArray(sec.entries)) continue;
@@ -31,6 +34,8 @@ function validateAndNormalizeSections(sections: any[], reportType?: string) {
         const total = Number(data.totalWorkers ?? data.count ?? 0);
         const present = Number(data.presentWorkers ?? (data.absentWorkers !== undefined ? total - Number(data.absentWorkers) : total));
         const absent = Number(data.absentWorkers ?? (total - present));
+        const workingHours = Number(data.workingHours ?? data.standardHours ?? 8);
+        const overtimeHours = Number(data.overtimeHours ?? 0);
 
         if (isNaN(total) || isNaN(present) || isNaN(absent)) {
           throw new Error('Labor attendance counts must be valid numbers');
@@ -38,20 +43,71 @@ function validateAndNormalizeSections(sections: any[], reportType?: string) {
         if (total < 0 || present < 0 || absent < 0) {
           throw new Error('Labor attendance numbers cannot be negative');
         }
+        if (isNaN(workingHours) || workingHours < 0) {
+          throw new Error('Working hours must be a non-negative number');
+        }
+        if (isNaN(overtimeHours) || overtimeHours < 0) {
+          throw new Error('Overtime hours must be a non-negative number');
+        }
         if (present + absent !== total) {
           const tradeName = data.classificationNameSnapshot || data.trade || data.name || 'classification';
           throw new Error(`Labor attendance mismatch for "${tradeName}": Present (${present}) + Absent (${absent}) must equal Total (${total})`);
+        }
+
+        // Duplicate classification check
+        const tradeName = (data.classificationNameSnapshot || data.trade || data.name || '').trim();
+        const classificationKey = (data.categoryId || data.classificationId || tradeName).toLowerCase();
+        if (classificationKey) {
+          if (seenClassifications.has(classificationKey)) {
+            throw new Error(`Duplicate labor classification detected: "${tradeName || classificationKey}". Each classification can only appear once in a report.`);
+          }
+          seenClassifications.add(classificationKey);
         }
 
         data.totalWorkers = total;
         data.presentWorkers = present;
         data.absentWorkers = absent;
         data.count = total;
-        data.workingHours = Number(data.workingHours ?? data.standardHours ?? 8);
-        data.overtimeHours = Number(data.overtimeHours ?? 0);
+        data.workingHours = workingHours;
+        data.overtimeHours = overtimeHours;
         data.remarks = data.remarks ? String(data.remarks).trim() : '';
         data.classificationNameSnapshot = data.classificationNameSnapshot || data.trade || data.name || 'General';
       }
+    }
+  }
+}
+
+async function validateLaborCategories(db: any, sections: any[], isNewReport: boolean) {
+  const categoryIds = new Set<string>();
+  for (const sec of sections) {
+    if (!sec.entries || !Array.isArray(sec.entries)) continue;
+    for (const entry of sec.entries) {
+      const data = entry.entryData;
+      if (data?.categoryId) categoryIds.add(data.categoryId);
+      else if (data?.classificationId) categoryIds.add(data.classificationId);
+    }
+  }
+
+  if (categoryIds.size === 0) return;
+
+  const idsArray = Array.from(categoryIds);
+  const foundCategories = await db
+    .select()
+    .from(laborCategories)
+    .where(inArray(laborCategories.id, idsArray));
+
+  const foundMap = new Map<string, any>();
+  for (const cat of foundCategories) {
+    foundMap.set(cat.id, cat);
+  }
+
+  for (const id of idsArray) {
+    const cat = foundMap.get(id);
+    if (!cat) {
+      throw new Error(`Labor classification with ID "${id}" does not exist`);
+    }
+    if (isNewReport && !cat.isActive) {
+      throw new Error(`Labor classification "${cat.name}" is deactivated and cannot be selected for new reports`);
     }
   }
 }
@@ -268,6 +324,10 @@ export class ReportService {
 
     // Validate and normalize sections & entries (labor attendance checks)
     validateAndNormalizeSections(input.sections, input.reportType);
+
+    if (input.reportType === 'labor' && input.sections) {
+      await validateLaborCategories(db, input.sections, true);
+    }
 
     // 4. Transactional insert
     const createdReport = await db.transaction(async (tx: any) => {
@@ -840,6 +900,9 @@ export class ReportService {
 
     if (input.sections && input.sections.length > 0) {
       validateAndNormalizeSections(input.sections, report.reportType);
+      if (report.reportType === 'labor') {
+        await validateLaborCategories(db, input.sections, false);
+      }
     }
 
     await db.transaction(async (tx: any) => {

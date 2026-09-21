@@ -6,7 +6,9 @@ export const laborCategories = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     name: varchar('name', { length: 255 }).notNull(),
-    categoryType: varchar('category_type', { length: 50 }).notNull(), // 'skilled', 'unskilled', 'supervisory'
+    nameEn: varchar('name_en', { length: 150 }),
+    nameHi: varchar('name_hi', { length: 150 }),
+    categoryType: varchar('category_type', { length: 50 }).notNull(), // 'company', 'custom', 'skilled', 'unskilled', 'supervisory'
     orderIndex: integer('order_index').notNull().default(0),
     isActive: boolean('is_active').notNull().default(true),
     createdBy: uuid('created_by').references(() => users.id),

@@ -6,6 +6,11 @@ export declare class AppUpdateService {
      */
     static ensureStorageDir(): void;
     /**
+     * Generates a temporary staging file path directly inside the APK storage directory.
+     * This enables instant atomic filesystem rename upon upload completion without copying.
+     */
+    static createStagingFilePath(originalFilename: string): string;
+    /**
      * Get safe absolute path within storage directory, preventing path traversal.
      */
     private static getSafePath;
@@ -14,6 +19,8 @@ export declare class AppUpdateService {
      */
     static createDraftRelease(params: {
         tempFilePath: string;
+        precomputedSha256?: string;
+        precomputedSize?: number;
         releaseNotes?: string;
         mandatory?: boolean;
         userId: string;

@@ -38,6 +38,44 @@ export declare const laborCategories: import("drizzle-orm/pg-core").PgTableWithC
         }, {}, {
             length: 255;
         }>;
+        nameEn: import("drizzle-orm/pg-core").PgColumn<{
+            name: "name_en";
+            tableName: "labor_categories";
+            dataType: "string";
+            columnType: "PgVarchar";
+            data: string;
+            driverParam: string;
+            notNull: false;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {
+            length: 150;
+        }>;
+        nameHi: import("drizzle-orm/pg-core").PgColumn<{
+            name: "name_hi";
+            tableName: "labor_categories";
+            dataType: "string";
+            columnType: "PgVarchar";
+            data: string;
+            driverParam: string;
+            notNull: false;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {
+            length: 150;
+        }>;
         categoryType: import("drizzle-orm/pg-core").PgColumn<{
             name: "category_type";
             tableName: "labor_categories";
