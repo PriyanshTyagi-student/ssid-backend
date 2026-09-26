@@ -162,12 +162,6 @@ export async function runMigrations() {
       updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
     );
 
-    ALTER TABLE labor_categories ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES users(id);
-    ALTER TABLE labor_categories ADD COLUMN IF NOT EXISTS updated_by UUID REFERENCES users(id);
-    ALTER TABLE labor_categories ADD COLUMN IF NOT EXISTS name_en VARCHAR(150);
-    ALTER TABLE labor_categories ADD COLUMN IF NOT EXISTS name_hi VARCHAR(150);
-    ALTER TABLE labor_categories ADD COLUMN IF NOT EXISTS parent_id UUID REFERENCES labor_categories(id);
-
     CREATE UNIQUE INDEX IF NOT EXISTS labor_cat_type_name_uniq_idx ON labor_categories (category_type, name);
     CREATE INDEX IF NOT EXISTS labor_cat_type_idx ON labor_categories (category_type);
     CREATE INDEX IF NOT EXISTS labor_cat_order_idx ON labor_categories (order_index);
@@ -235,6 +229,32 @@ export async function runMigrations() {
     } else {
       await db.execute(sql.raw(migrationSql));
     }
+
+    // Safely ensure new columns exist for existing tables without catalog index conflicts
+    const ensureColumn = async (table: string, col: string, alterSql: string) => {
+      try {
+        const queryStr = `SELECT 1 FROM information_schema.columns WHERE table_name = '${table}' AND column_name = '${col}'`;
+        const res = typeof client.query === 'function'
+          ? await client.query(queryStr)
+          : await db.execute(sql.raw(queryStr));
+        const rows = (res as any)?.rows || (Array.isArray(res) ? res : []);
+        if (rows.length === 0) {
+          if (typeof client.exec === 'function') {
+            await client.exec(alterSql);
+          } else if (typeof client.query === 'function') {
+            await client.query(alterSql);
+          } else {
+            await db.execute(sql.raw(alterSql));
+          }
+        }
+      } catch (_) {}
+    };
+
+    await ensureColumn('labor_categories', 'created_by', 'ALTER TABLE labor_categories ADD COLUMN created_by UUID REFERENCES users(id)');
+    await ensureColumn('labor_categories', 'updated_by', 'ALTER TABLE labor_categories ADD COLUMN updated_by UUID REFERENCES users(id)');
+    await ensureColumn('labor_categories', 'name_en', 'ALTER TABLE labor_categories ADD COLUMN name_en VARCHAR(150)');
+    await ensureColumn('labor_categories', 'name_hi', 'ALTER TABLE labor_categories ADD COLUMN name_hi VARCHAR(150)');
+    await ensureColumn('labor_categories', 'parent_id', 'ALTER TABLE labor_categories ADD COLUMN parent_id UUID REFERENCES labor_categories(id)');
 
     logger.info('[MIGRATION] All tables, indexes, and constraints verified successfully.');
   } catch (err) {

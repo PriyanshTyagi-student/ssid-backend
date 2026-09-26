@@ -52,6 +52,7 @@ export const laborCategoryRoutes = async (fastify) => {
             nameEn: laborCategories.nameEn,
             nameHi: laborCategories.nameHi,
             categoryType: laborCategories.categoryType,
+            parentId: laborCategories.parentId,
             orderIndex: laborCategories.orderIndex,
             isActive: laborCategories.isActive,
             createdBy: laborCategories.createdBy,
@@ -433,6 +434,7 @@ export const laborCategoryRoutes = async (fastify) => {
                     categoryType: { type: 'string', minLength: 1, maxLength: 50 },
                     orderIndex: { type: 'integer', minimum: 0 },
                     isActive: { type: 'boolean' },
+                    parentId: { type: 'string', format: 'uuid' },
                 },
             },
         },
@@ -453,17 +455,17 @@ export const laborCategoryRoutes = async (fastify) => {
             return reply.status(400).send(errorResponse('BAD_REQUEST', 'Category classification cannot be empty'));
         }
         const db = getDb();
-        // Check case-insensitive duplicate in the same categoryType (active or inactive)
+        // Check case-insensitive duplicate in the same categoryType and parentId (active or inactive)
         const normalizedName = name.toLowerCase();
         const [existing] = await db
             .select()
             .from(laborCategories)
-            .where(and(eq(laborCategories.categoryType, categoryType), sql `lower(trim(${laborCategories.name})) = ${normalizedName}`))
+            .where(and(eq(laborCategories.categoryType, categoryType), body.parentId ? eq(laborCategories.parentId, body.parentId) : sql `${laborCategories.parentId} IS NULL`, sql `lower(trim(${laborCategories.name})) = ${normalizedName}`))
             .limit(1);
         if (existing) {
             return reply
                 .status(409)
-                .send(errorResponse('CONFLICT', 'A classification with this name already exists.'));
+                .send(errorResponse('CONFLICT', 'A classification with this name already exists under the same parent.'));
         }
         // Determine orderIndex if not provided
         let orderIndex = body.orderIndex;
@@ -471,7 +473,7 @@ export const laborCategoryRoutes = async (fastify) => {
             const [maxOrder] = await db
                 .select({ max: sql `COALESCE(MAX(${laborCategories.orderIndex}), 0)` })
                 .from(laborCategories)
-                .where(eq(laborCategories.categoryType, categoryType));
+                .where(and(eq(laborCategories.categoryType, categoryType), body.parentId ? eq(laborCategories.parentId, body.parentId) : sql `${laborCategories.parentId} IS NULL`));
             orderIndex = Number(maxOrder?.max ?? 0) + 1;
         }
         const [newCategory] = await db
@@ -481,6 +483,7 @@ export const laborCategoryRoutes = async (fastify) => {
             nameEn: nameEn || name,
             nameHi: nameHi || null,
             categoryType,
+            parentId: body.parentId || null,
             orderIndex,
             isActive: body.isActive !== undefined ? body.isActive : true,
             createdBy: user.id,
@@ -525,6 +528,7 @@ export const laborCategoryRoutes = async (fastify) => {
                     categoryType: { type: 'string', minLength: 1, maxLength: 50 },
                     orderIndex: { type: 'integer', minimum: 0 },
                     isActive: { type: 'boolean' },
+                    parentId: { type: 'string', format: 'uuid' },
                 },
             },
         },
@@ -570,18 +574,26 @@ export const laborCategoryRoutes = async (fastify) => {
         if (body.isActive !== undefined) {
             updateData.isActive = body.isActive;
         }
-        // Check duplicate name under target categoryType if changing name or categoryType
+        if (body.parentId !== undefined) {
+            // Validate that parentId is not the same as the category being updated (prevent self-reference)
+            if (body.parentId === id) {
+                return reply.status(400).send(errorResponse('BAD_REQUEST', 'A category cannot be its own parent'));
+            }
+            updateData.parentId = body.parentId;
+        }
+        // Check duplicate name under target categoryType and parentId if changing name or categoryType or parentId
         const targetName = updateData.name ?? category.name;
         const targetType = updateData.categoryType ?? category.categoryType;
+        const targetParentId = body.parentId !== undefined ? body.parentId : category.parentId;
         const [duplicate] = await db
             .select()
             .from(laborCategories)
-            .where(and(eq(laborCategories.categoryType, targetType), sql `lower(trim(${laborCategories.name})) = ${targetName.trim().toLowerCase()}`, sql `${laborCategories.id} != ${id}`))
+            .where(and(eq(laborCategories.categoryType, targetType), targetParentId ? eq(laborCategories.parentId, targetParentId) : sql `${laborCategories.parentId} IS NULL`, sql `lower(trim(${laborCategories.name})) = ${targetName.trim().toLowerCase()}`, sql `${laborCategories.id} != ${id}`))
             .limit(1);
         if (duplicate) {
             return reply
                 .status(409)
-                .send(errorResponse('CONFLICT', 'A classification with this name already exists.'));
+                .send(errorResponse('CONFLICT', 'A classification with this name already exists under the same parent.'));
         }
         const [updated] = await db
             .update(laborCategories)

@@ -9,6 +9,7 @@ import { successResponse, errorResponse } from '../../utils/response.js';
 import { recordAudit } from '../audit/service.js';
 import { AppUpdateService } from './updateService.js';
 import { logger } from '../../utils/logger.js';
+import { env } from '../../config/env.js';
 export const appVersionRoutes = async (fastify) => {
     // ==========================================
     // PUBLIC MOBILE / CLIENT ENDPOINTS
@@ -187,48 +188,41 @@ export const appVersionRoutes = async (fastify) => {
          */
         adminRouter.post('/updates/upload', {
             preHandler: [requirePermission('app_updates.upload')],
+            bodyLimit: env.MAX_APK_SIZE_MB * 1024 * 1024,
             schema: {
-                description: 'Upload an APK package to create a draft release',
+                description: 'Upload an APK package to create a draft release (Supports multipart and direct high-speed raw streaming)',
                 tags: ['App Updates'],
                 security: [{ bearerAuth: [] }],
             },
         }, async (request, reply) => {
             const user = request.user;
-            // Handle multipart data
-            if (typeof request.file !== 'function') {
-                return reply.status(503).send(errorResponse('SERVICE_UNAVAILABLE', '@fastify/multipart is not installed on this server. Run "npm install" on the server to enable uploads.'));
+            // Enable TCP NoDelay for immediate packet transmission
+            if (request.raw.socket) {
+                request.raw.socket.setNoDelay(true);
             }
-            const data = await request.file();
-            if (!data) {
-                return reply.status(400).send(errorResponse('BAD_REQUEST', 'No APK file uploaded. Use field name "apk" or "file".'));
-            }
-            const originalName = data.filename || '';
-            if (!originalName.toLowerCase().endsWith('.apk')) {
-                return reply.status(400).send(errorResponse('INVALID_FILE_TYPE', 'Only .apk files are supported'));
-            }
-            // Create staging file directly inside storage directory for zero-copy atomic rename
-            const stagingFilePath = AppUpdateService.createStagingFilePath(originalName);
-            try {
-                // Concurrently compute SHA-256 and total bytes in-flight while streaming from client
-                const hash = crypto.createHash('sha256');
-                let uploadedBytes = 0;
-                const hashTransform = new Transform({
-                    transform(chunk, _encoding, callback) {
-                        hash.update(chunk);
-                        uploadedBytes += chunk.length;
-                        callback(null, chunk);
-                    },
+            const isMultipart = typeof request.isMultipart === 'function' && request.isMultipart();
+            let streamSource;
+            let originalName = 'ssid-app.apk';
+            let releaseNotes;
+            let mandatory = false;
+            let versionName;
+            let versionCode;
+            if (isMultipart) {
+                if (typeof request.file !== 'function') {
+                    return reply.status(503).send(errorResponse('SERVICE_UNAVAILABLE', '@fastify/multipart is not installed on this server. Run "npm install" on the server to enable uploads.'));
+                }
+                // Use 4MB buffers for maximum disk and network throughput
+                const data = await request.file({
+                    limits: { fileSize: env.MAX_APK_SIZE_MB * 1024 * 1024 },
+                    highWaterMark: 4 * 1024 * 1024,
+                    fileHwm: 4 * 1024 * 1024,
                 });
-                // 2MB highWaterMark buffer to maximize disk write throughput
-                const writeStream = fs.createWriteStream(stagingFilePath, { highWaterMark: 2 * 1024 * 1024 });
-                await pipeline(data.file, hashTransform, writeStream);
-                const computedSha256 = hash.digest('hex');
-                // Extract non-file fields if provided
+                if (!data) {
+                    return reply.status(400).send(errorResponse('BAD_REQUEST', 'No APK file uploaded. Use field name "apk" or "file".'));
+                }
+                originalName = data.filename || 'ssid-app.apk';
+                streamSource = data.file;
                 const fields = data.fields;
-                let releaseNotes;
-                let mandatory = false;
-                let versionName;
-                let versionCode;
                 if (fields) {
                     if (fields.releaseNotes && typeof fields.releaseNotes.value === 'string') {
                         releaseNotes = fields.releaseNotes.value;
@@ -239,18 +233,64 @@ export const appVersionRoutes = async (fastify) => {
                     }
                     if (fields.versionName && typeof fields.versionName.value === 'string') {
                         const trimmed = fields.versionName.value.trim();
-                        if (trimmed) {
+                        if (trimmed)
                             versionName = trimmed;
-                        }
                     }
                     if (fields.versionCode) {
                         const rawVal = fields.versionCode.value;
                         const parsed = typeof rawVal === 'string' ? parseInt(rawVal, 10) : Number(rawVal);
-                        if (!isNaN(parsed) && parsed > 0) {
+                        if (!isNaN(parsed) && parsed > 0)
                             versionCode = parsed;
-                        }
                     }
                 }
+            }
+            else {
+                // Direct Raw Binary Streaming (bypasses multipart boundary scanning for 2x-3x faster uploads)
+                streamSource = request.raw;
+                const query = (request.query || {});
+                const headers = request.headers;
+                originalName = query.filename ||
+                    headers['x-filename'] ||
+                    'ssid-app.apk';
+                releaseNotes = query.releaseNotes ||
+                    headers['x-release-notes'];
+                const rawMandatory = query.mandatory ?? headers['x-mandatory'];
+                if (rawMandatory !== undefined) {
+                    mandatory = rawMandatory === true || rawMandatory === 'true' || rawMandatory === '1';
+                }
+                const rawVersionName = query.versionName || headers['x-version-name'];
+                if (rawVersionName && rawVersionName.trim()) {
+                    versionName = rawVersionName.trim();
+                }
+                const rawVersionCode = query.versionCode || headers['x-version-code'];
+                if (rawVersionCode) {
+                    const parsed = typeof rawVersionCode === 'string' ? parseInt(rawVersionCode, 10) : Number(rawVersionCode);
+                    if (!isNaN(parsed) && parsed > 0)
+                        versionCode = parsed;
+                }
+            }
+            if (!originalName.toLowerCase().endsWith('.apk')) {
+                return reply.status(400).send(errorResponse('INVALID_FILE_TYPE', 'Only .apk files are supported'));
+            }
+            // Create staging file directly inside storage directory for zero-copy atomic rename
+            const stagingFilePath = AppUpdateService.createStagingFilePath(originalName);
+            try {
+                // Concurrently compute SHA-256 and total bytes in-flight while streaming from client
+                const hash = crypto.createHash('sha256');
+                let uploadedBytes = 0;
+                // 4MB highWaterMark buffer to maximize streaming throughput without backpressure choking
+                const hashTransform = new Transform({
+                    highWaterMark: 4 * 1024 * 1024,
+                    transform(chunk, _encoding, callback) {
+                        hash.update(chunk);
+                        uploadedBytes += chunk.length;
+                        callback(null, chunk);
+                    },
+                });
+                // 4MB highWaterMark buffer for disk write throughput
+                const writeStream = fs.createWriteStream(stagingFilePath, { highWaterMark: 4 * 1024 * 1024 });
+                await pipeline(streamSource, hashTransform, writeStream);
+                const computedSha256 = hash.digest('hex');
                 // Create draft release with instant atomic rename & precomputed hash/size
                 const draft = await AppUpdateService.createDraftRelease({
                     tempFilePath: stagingFilePath,
@@ -262,8 +302,8 @@ export const appVersionRoutes = async (fastify) => {
                     mandatory,
                     userId: user.id,
                 });
-                // Record audit log
-                await recordAudit({
+                // Record audit log asynchronously so client gets immediate HTTP response
+                recordAudit({
                     userId: user.id,
                     action: AuditAction.APP_UPDATE_UPLOADED,
                     entityType: 'app_release',
@@ -278,7 +318,7 @@ export const appVersionRoutes = async (fastify) => {
                     },
                     ipAddress: request.ip,
                     userAgent: request.headers['user-agent'],
-                });
+                }).catch((err) => logger.warn({ err }, '[AUDIT] Failed to record upload audit'));
                 return reply.status(201).send(successResponse(draft, 'APK uploaded and validated successfully as a draft release'));
             }
             catch (err) {

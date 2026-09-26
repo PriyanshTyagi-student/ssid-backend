@@ -49,11 +49,28 @@ export async function buildApp(): Promise<FastifyInstance<any, any, any, any>> {
     }
   });
 
+  // Support raw binary APK streaming directly into disk without memory buffering
+  app.addContentTypeParser(
+    ['application/octet-stream', 'application/vnd.android.package-archive'],
+    (_req, _payload, done) => {
+      done(null);
+    }
+  );
+
   // 2. CORS
   await app.register(cors, {
     origin: env.CORS_ORIGIN === '*' ? true : env.CORS_ORIGIN.split(','),
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'X-Requested-With',
+      'X-Filename',
+      'X-Version-Name',
+      'X-Version-Code',
+      'X-Mandatory',
+      'X-Release-Notes',
+    ],
     credentials: true,
   });
 
@@ -72,8 +89,9 @@ export async function buildApp(): Promise<FastifyInstance<any, any, any, any>> {
         fileSize: env.MAX_APK_SIZE_MB * 1024 * 1024,
         files: 1,
       },
-      // 2MB stream buffer to maximize throughput during large binary APK uploads
-      highWaterMark: 2 * 1024 * 1024,
+      // 4MB stream buffer to maximize throughput during large binary APK uploads
+      highWaterMark: 4 * 1024 * 1024,
+      fileHwm: 4 * 1024 * 1024,
     });
   } catch (err: any) {
     logger.warn('[APP] @fastify/multipart not found or failed to load. Run "npm install" on server to enable APK file uploads.');

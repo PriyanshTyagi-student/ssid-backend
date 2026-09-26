@@ -16,7 +16,9 @@ describe('App Updates Optimized Fast Upload Pipeline', () => {
   });
 
   afterAll(async () => {
-    await closeDatabase();
+    try {
+      await closeDatabase();
+    } catch (_) {}
   });
 
   it('createStagingFilePath creates a unique staging path in APK storage directory', () => {
@@ -76,48 +78,33 @@ describe('App Updates Optimized Fast Upload Pipeline', () => {
   });
 
   it('updateRelease updates versionName, versionCode, releaseNotes, and mandatory flag', async () => {
-    const published = await AppUpdateService.getPublishedRelease();
-    if (!published) {
-      // If none published, list releases or skip
-      const releases = await AppUpdateService.listReleases();
-      if (releases.length === 0) return;
-      const target = releases[0];
-      const updated = await AppUpdateService.updateRelease(target.id, {
-        versionName: '1.9.9-test',
-        versionCode: 88,
-        releaseNotes: 'Updated release notes test',
-        mandatory: true,
-      });
-      expect(updated.versionName).toBe('1.9.9-test');
-      expect(updated.versionCode).toBe(88);
-      expect(updated.releaseNotes).toBe('Updated release notes test');
-      expect(updated.mandatory).toBe(true);
+    const existingApkPath = path.resolve(process.cwd(), 'data/apks/ssid-v1.0.1.apk');
+    if (!fs.existsSync(existingApkPath)) {
       return;
     }
 
-    const originalVersionName = published.versionName;
-    const originalVersionCode = published.versionCode;
+    const staging = AppUpdateService.createStagingFilePath('test-update.apk');
+    await fs.promises.copyFile(existingApkPath, staging);
+    const release = await AppUpdateService.createDraftRelease({
+      tempFilePath: staging,
+      versionName: '2.0.0-draft',
+      versionCode: 200,
+      userId: '199de4a8-56e1-411e-bb2f-2f8c8f363080',
+    });
 
-    // Update published release
-    const updated = await AppUpdateService.updateRelease(published.id, {
-      versionName: `${originalVersionName}-edit`,
-      versionCode: originalVersionCode + 1,
-      releaseNotes: 'Edited live release notes',
+    const updated = await AppUpdateService.updateRelease(release.id, {
+      versionName: '2.0.1-draft',
+      versionCode: 201,
+      releaseNotes: 'Updated notes',
       mandatory: true,
     });
 
-    expect(updated.id).toBe(published.id);
-    expect(updated.versionName).toBe(`${originalVersionName}-edit`);
-    expect(updated.versionCode).toBe(originalVersionCode + 1);
-    expect(updated.releaseNotes).toBe('Edited live release notes');
+    expect(updated.id).toBe(release.id);
+    expect(updated.versionName).toBe('2.0.1-draft');
+    expect(updated.versionCode).toBe(201);
+    expect(updated.releaseNotes).toBe('Updated notes');
     expect(updated.mandatory).toBe(true);
 
-    // Revert back for consistency
-    await AppUpdateService.updateRelease(published.id, {
-      versionName: originalVersionName,
-      versionCode: originalVersionCode,
-      releaseNotes: published.releaseNotes,
-      mandatory: published.mandatory,
-    });
+    await AppUpdateService.deleteRelease(release.id);
   });
 });

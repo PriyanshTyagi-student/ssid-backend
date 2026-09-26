@@ -95,6 +95,23 @@ export declare const laborCategories: import("drizzle-orm/pg-core").PgTableWithC
         }, {}, {
             length: 50;
         }>;
+        parentId: import("drizzle-orm/pg-core").PgColumn<{
+            name: "parent_id";
+            tableName: "labor_categories";
+            dataType: "string";
+            columnType: "PgUUID";
+            data: string;
+            driverParam: string;
+            notNull: false;
+            hasDefault: false;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
         orderIndex: import("drizzle-orm/pg-core").PgColumn<{
             name: "order_index";
             tableName: "labor_categories";
