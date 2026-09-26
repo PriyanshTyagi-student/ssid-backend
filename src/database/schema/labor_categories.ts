@@ -8,7 +8,8 @@ export const laborCategories = pgTable(
     name: varchar('name', { length: 255 }).notNull(),
     nameEn: varchar('name_en', { length: 150 }),
     nameHi: varchar('name_hi', { length: 150 }),
-    categoryType: varchar('category_type', { length: 50 }).notNull(), // 'company', 'custom', 'skilled', 'unskilled', 'supervisory'
+    categoryType: varchar('category_type', { length: 50 }).notNull(), // 'company', 'custom', or parent category code
+    parentId: uuid('parent_id').references(() => laborCategories.id), // For hierarchical classifications
     orderIndex: integer('order_index').notNull().default(0),
     isActive: boolean('is_active').notNull().default(true),
     createdBy: uuid('created_by').references(() => users.id),
@@ -21,6 +22,7 @@ export const laborCategories = pgTable(
     index('labor_cat_type_idx').on(table.categoryType),
     index('labor_cat_order_idx').on(table.orderIndex),
     index('labor_cat_active_idx').on(table.isActive),
+    index('labor_cat_parent_idx').on(table.parentId),
   ]
 );
 

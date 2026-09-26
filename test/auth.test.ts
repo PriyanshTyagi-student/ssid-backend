@@ -4,6 +4,7 @@ import { initDatabase, closeDatabase } from '../src/database/connection.js';
 import { runMigrations } from '../src/database/migrate.js';
 import { seedDatabase } from '../src/database/seed.js';
 import { normalizePhoneNumber, isValidIndianPhone } from '../src/utils/phone.js';
+import { env } from '../src/config/env.js';
 import type { FastifyInstance } from 'fastify';
 
 describe('Phone Normalization Utils', () => {
@@ -160,5 +161,25 @@ describe('Authentication API', () => {
     expect(response.statusCode).toBe(200);
     const body = JSON.parse(response.payload);
     expect(body.success).toBe(true);
+  });
+
+  it('POST /api/v1/auth/login includes Retry-After when rate limited', async () => {
+    let limitedResponse;
+    for (let attempt = 0; attempt <= env.RATE_LIMIT_AUTH_MAX; attempt++) {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        payload: { phone: '9876543210', password: 'invalid-password' },
+      });
+      if (response.statusCode === 429) {
+        limitedResponse = response;
+        break;
+      }
+    }
+
+    expect(limitedResponse?.statusCode).toBe(429);
+    expect(limitedResponse?.headers['retry-after']).toBeDefined();
+    const body = JSON.parse(limitedResponse!.payload);
+    expect(body.error.code).toBe('TOO_MANY_REQUESTS');
   });
 });

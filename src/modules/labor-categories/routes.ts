@@ -64,6 +64,7 @@ export const laborCategoryRoutes: FastifyPluginAsync = async (fastify) => {
           nameEn: laborCategories.nameEn,
           nameHi: laborCategories.nameHi,
           categoryType: laborCategories.categoryType,
+          parentId: laborCategories.parentId,
           orderIndex: laborCategories.orderIndex,
           isActive: laborCategories.isActive,
           createdBy: laborCategories.createdBy,
@@ -562,6 +563,7 @@ export const laborCategoryRoutes: FastifyPluginAsync = async (fastify) => {
             categoryType: { type: 'string', minLength: 1, maxLength: 50 },
             orderIndex: { type: 'integer', minimum: 0 },
             isActive: { type: 'boolean' },
+            parentId: { type: 'string', format: 'uuid' },
           },
         },
       },
@@ -576,6 +578,7 @@ export const laborCategoryRoutes: FastifyPluginAsync = async (fastify) => {
         categoryType: string;
         orderIndex?: number;
         isActive?: boolean;
+        parentId?: string;
       };
 
       const nameEn = body.nameEn?.trim() || '';
@@ -595,7 +598,7 @@ export const laborCategoryRoutes: FastifyPluginAsync = async (fastify) => {
 
       const db = getDb();
 
-      // Check case-insensitive duplicate in the same categoryType (active or inactive)
+      // Check case-insensitive duplicate in the same categoryType and parentId (active or inactive)
       const normalizedName = name.toLowerCase();
       const [existing] = await db
         .select()
@@ -603,6 +606,7 @@ export const laborCategoryRoutes: FastifyPluginAsync = async (fastify) => {
         .where(
           and(
             eq(laborCategories.categoryType, categoryType),
+            body.parentId ? eq(laborCategories.parentId, body.parentId) : sql`${laborCategories.parentId} IS NULL`,
             sql`lower(trim(${laborCategories.name})) = ${normalizedName}`
           )
         )
@@ -611,7 +615,7 @@ export const laborCategoryRoutes: FastifyPluginAsync = async (fastify) => {
       if (existing) {
         return reply
           .status(409)
-          .send(errorResponse('CONFLICT', 'A classification with this name already exists.'));
+          .send(errorResponse('CONFLICT', 'A classification with this name already exists under the same parent.'));
       }
 
       // Determine orderIndex if not provided
@@ -620,7 +624,12 @@ export const laborCategoryRoutes: FastifyPluginAsync = async (fastify) => {
         const [maxOrder] = await db
           .select({ max: sql<number>`COALESCE(MAX(${laborCategories.orderIndex}), 0)` })
           .from(laborCategories)
-          .where(eq(laborCategories.categoryType, categoryType));
+          .where(
+            and(
+              eq(laborCategories.categoryType, categoryType),
+              body.parentId ? eq(laborCategories.parentId, body.parentId) : sql`${laborCategories.parentId} IS NULL`
+            )
+          );
         orderIndex = Number(maxOrder?.max ?? 0) + 1;
       }
 
@@ -631,6 +640,7 @@ export const laborCategoryRoutes: FastifyPluginAsync = async (fastify) => {
           nameEn: nameEn || name,
           nameHi: nameHi || null,
           categoryType,
+          parentId: body.parentId || null,
           orderIndex,
           isActive: body.isActive !== undefined ? body.isActive : true,
           createdBy: user.id,
@@ -681,6 +691,7 @@ export const laborCategoryRoutes: FastifyPluginAsync = async (fastify) => {
             categoryType: { type: 'string', minLength: 1, maxLength: 50 },
             orderIndex: { type: 'integer', minimum: 0 },
             isActive: { type: 'boolean' },
+            parentId: { type: 'string', format: 'uuid' },
           },
         },
       },
@@ -696,6 +707,7 @@ export const laborCategoryRoutes: FastifyPluginAsync = async (fastify) => {
         categoryType?: string;
         orderIndex?: number;
         isActive?: boolean;
+        parentId?: string;
       };
 
       const db = getDb();
@@ -743,9 +755,18 @@ export const laborCategoryRoutes: FastifyPluginAsync = async (fastify) => {
         updateData.isActive = body.isActive;
       }
 
-      // Check duplicate name under target categoryType if changing name or categoryType
+      if (body.parentId !== undefined) {
+        // Validate that parentId is not the same as the category being updated (prevent self-reference)
+        if (body.parentId === id) {
+          return reply.status(400).send(errorResponse('BAD_REQUEST', 'A category cannot be its own parent'));
+        }
+        updateData.parentId = body.parentId;
+      }
+
+      // Check duplicate name under target categoryType and parentId if changing name or categoryType or parentId
       const targetName = updateData.name ?? category.name;
       const targetType = updateData.categoryType ?? category.categoryType;
+      const targetParentId = body.parentId !== undefined ? body.parentId : category.parentId;
 
       const [duplicate] = await db
         .select()
@@ -753,6 +774,7 @@ export const laborCategoryRoutes: FastifyPluginAsync = async (fastify) => {
         .where(
           and(
             eq(laborCategories.categoryType, targetType),
+            targetParentId ? eq(laborCategories.parentId, targetParentId) : sql`${laborCategories.parentId} IS NULL`,
             sql`lower(trim(${laborCategories.name})) = ${targetName.trim().toLowerCase()}`,
             sql`${laborCategories.id} != ${id}`
           )
@@ -762,7 +784,7 @@ export const laborCategoryRoutes: FastifyPluginAsync = async (fastify) => {
       if (duplicate) {
         return reply
           .status(409)
-          .send(errorResponse('CONFLICT', 'A classification with this name already exists.'));
+          .send(errorResponse('CONFLICT', 'A classification with this name already exists under the same parent.'));
       }
 
       const [updated] = await db

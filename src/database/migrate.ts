@@ -150,7 +150,10 @@ export async function runMigrations() {
     CREATE TABLE IF NOT EXISTS labor_categories (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name VARCHAR(255) NOT NULL,
+      name_en VARCHAR(150),
+      name_hi VARCHAR(150),
       category_type VARCHAR(50) NOT NULL,
+      parent_id UUID REFERENCES labor_categories(id),
       order_index INTEGER NOT NULL DEFAULT 0,
       is_active BOOLEAN NOT NULL DEFAULT TRUE,
       created_by UUID REFERENCES users(id),
@@ -163,6 +166,7 @@ export async function runMigrations() {
     ALTER TABLE labor_categories ADD COLUMN IF NOT EXISTS updated_by UUID REFERENCES users(id);
     ALTER TABLE labor_categories ADD COLUMN IF NOT EXISTS name_en VARCHAR(150);
     ALTER TABLE labor_categories ADD COLUMN IF NOT EXISTS name_hi VARCHAR(150);
+    ALTER TABLE labor_categories ADD COLUMN IF NOT EXISTS parent_id UUID REFERENCES labor_categories(id);
 
     CREATE UNIQUE INDEX IF NOT EXISTS labor_cat_type_name_uniq_idx ON labor_categories (category_type, name);
     CREATE INDEX IF NOT EXISTS labor_cat_type_idx ON labor_categories (category_type);
