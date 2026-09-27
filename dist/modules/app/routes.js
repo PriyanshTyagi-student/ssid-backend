@@ -10,6 +10,38 @@ import { recordAudit } from '../audit/service.js';
 import { AppUpdateService } from './updateService.js';
 import { logger } from '../../utils/logger.js';
 import { env } from '../../config/env.js';
+/**
+ * Streams an APK package with full HTTP Range request support (RFC 7233).
+ * Enables parallel multi-chunk downloading and instant resumable downloads.
+ * Uses 1MB read buffers and TCP NoDelay for maximum wire-speed throughput.
+ */
+function streamApkWithRange(request, reply, filePath, release, fileSize) {
+    if (request.raw.socket) {
+        request.raw.socket.setNoDelay(true);
+        request.raw.socket.setKeepAlive(true, 60000);
+    }
+    reply.type('application/vnd.android.package-archive');
+    reply.header('Accept-Ranges', 'bytes');
+    reply.header('Content-Disposition', `attachment; filename="${release.filename}"`);
+    reply.header('Cache-Control', 'public, max-age=86400');
+    const range = request.headers.range;
+    if (range && typeof range === 'string' && range.startsWith('bytes=')) {
+        const parts = range.replace(/bytes=/, '').split('-');
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+        if (isNaN(start) || isNaN(end) || start >= fileSize || end >= fileSize || start > end) {
+            reply.header('Content-Range', `bytes */${fileSize}`);
+            return reply.status(416).send('Requested Range Not Satisfiable');
+        }
+        const chunkSize = end - start + 1;
+        reply.status(206);
+        reply.header('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+        reply.header('Content-Length', chunkSize);
+        return reply.send(fs.createReadStream(filePath, { start, end, highWaterMark: 1024 * 1024 }));
+    }
+    reply.header('Content-Length', fileSize);
+    return reply.send(fs.createReadStream(filePath, { highWaterMark: 1024 * 1024 }));
+}
 export const appVersionRoutes = async (fastify) => {
     // ==========================================
     // PUBLIC MOBILE / CLIENT ENDPOINTS
@@ -100,11 +132,7 @@ export const appVersionRoutes = async (fastify) => {
             ipAddress: request.ip,
             userAgent: request.headers['user-agent'],
         }).catch(() => { });
-        reply.type('application/vnd.android.package-archive');
-        reply.header('Content-Length', stat.size);
-        reply.header('Content-Disposition', `attachment; filename="${release.filename}"`);
-        reply.header('Cache-Control', 'public, max-age=3600');
-        return reply.send(fs.createReadStream(filePath));
+        return streamApkWithRange(request, reply, filePath, release, stat.size);
     });
     /**
      * GET /api/v1/app/updates/download/:filename
@@ -131,11 +159,7 @@ export const appVersionRoutes = async (fastify) => {
         }
         const { filePath, release } = resolved;
         const stat = await fs.promises.stat(filePath);
-        reply.type('application/vnd.android.package-archive');
-        reply.header('Content-Length', stat.size);
-        reply.header('Content-Disposition', `attachment; filename="${release.filename}"`);
-        reply.header('Cache-Control', 'public, max-age=3600');
-        return reply.send(fs.createReadStream(filePath));
+        return streamApkWithRange(request, reply, filePath, release, stat.size);
     });
     // ==========================================
     // AUTHENTICATED MANAGEMENT ENDPOINTS

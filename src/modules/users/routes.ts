@@ -13,6 +13,7 @@ import { successResponse, errorResponse } from '../../utils/response.js';
 import { recordAudit } from '../audit/service.js';
 import { AuditAction, UserRole, UserStatus } from '../../config/constants.js';
 import { hashPassword } from '../../utils/password.js';
+import { normalizePhoneNumber } from '../../utils/phone.js';
 
 const updateProfileSchema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters').optional(),
@@ -106,7 +107,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
       const db = getDb();
 
       // Normalize phone number if needed (+91 or plain)
-      let phone = body.phoneNumber.trim();
+      let phone = normalizePhoneNumber(body.phoneNumber) || body.phoneNumber.trim();
       if (!phone.startsWith('+')) {
         phone = phone.startsWith('91') && phone.length === 12 ? `+${phone}` : `+91${phone}`;
       }

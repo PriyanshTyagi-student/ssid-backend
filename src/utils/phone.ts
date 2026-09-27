@@ -36,13 +36,13 @@ export function normalizePhoneNumber(rawPhone: string): string | null {
   // If starts with 91 and is 12 digits
   if (cleaned.startsWith('91') && cleaned.length === 12) {
     const tenDigits = cleaned.slice(2);
-    if (/^[6-9]\d{9}$/.test(tenDigits)) {
+    if (/^\d{10}$/.test(tenDigits)) {
       return `+91${tenDigits}`;
     }
   }
 
-  // If 10 digits starting with 6-9
-  if (/^[6-9]\d{9}$/.test(cleaned)) {
+  // If 10 digits
+  if (/^\d{10}$/.test(cleaned)) {
     return `+91${cleaned}`;
   }
 
