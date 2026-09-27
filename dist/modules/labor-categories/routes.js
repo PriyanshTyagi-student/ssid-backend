@@ -99,6 +99,7 @@ export const laborCategoryRoutes = async (fastify) => {
     });
     function hasClassificationManagePermission(user) {
         return (hasPermission(user.permissions, 'labor_categories.manage') ||
+            hasPermission(user.permissions, 'labor_categories.delete') ||
             hasPermission(user.permissions, 'labor_categories.edit') ||
             hasPermission(user.permissions, 'labor_categories.create') ||
             hasPermission(user.permissions, '*'));
@@ -631,7 +632,7 @@ export const laborCategoryRoutes = async (fastify) => {
     });
     // DELETE /api/v1/labor-categories/:id
     fastify.delete('/:id', {
-        preHandler: [requirePermission('labor_categories.delete')],
+        preHandler: [requirePermission('labor_categories.delete', 'labor_categories.manage')],
         schema: {
             description: 'Delete a labor category (historical reports preserve snapshot)',
             tags: ['Labor Categories'],
