@@ -30,6 +30,7 @@ export async function buildApp() {
     // 1. Security Headers
     await app.register(helmet, {
         contentSecurityPolicy: false, // Allows Swagger UI
+        crossOriginResourcePolicy: { policy: 'cross-origin' },
     });
     // Support empty JSON request bodies gracefully without throwing FST_ERR_CTP_EMPTY_JSON_BODY
     app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
@@ -50,12 +51,18 @@ export async function buildApp() {
         done(null);
     });
     // 2. CORS
+    const corsOrigin = env.CORS_ORIGIN === '*'
+        ? true
+        : env.CORS_ORIGIN.split(',').map((o) => o.trim());
     await app.register(cors, {
-        origin: env.CORS_ORIGIN === '*' ? true : env.CORS_ORIGIN.split(','),
+        origin: corsOrigin,
         methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
         allowedHeaders: [
             'Content-Type',
             'Authorization',
+            'Accept',
+            'Origin',
+            'Cache-Control',
             'X-Requested-With',
             'X-Filename',
             'X-Version-Name',
