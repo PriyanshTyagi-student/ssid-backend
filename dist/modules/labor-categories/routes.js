@@ -23,6 +23,7 @@ export const laborCategoryRoutes = async (fastify) => {
                 type: 'object',
                 properties: {
                     includeInactive: { type: 'boolean' },
+                    includeTemporary: { type: 'boolean' },
                     categoryType: { type: 'string' },
                 },
             },
@@ -32,14 +33,18 @@ export const laborCategoryRoutes = async (fastify) => {
         const query = request.query;
         const db = getDb();
         // Users with manage/edit/view_inactive or wildcard can view inactive categories
-        const canViewInactive = (hasPermission(user.permissions, 'labor_categories.manage') ||
+        const canManage = hasPermission(user.permissions, 'labor_categories.manage') ||
             hasPermission(user.permissions, 'labor_categories.edit') ||
             hasPermission(user.permissions, 'labor_categories.view_inactive') ||
-            hasPermission(user.permissions, '*')) &&
-            (query.includeInactive === true || query.includeInactive === 'true');
+            hasPermission(user.permissions, '*');
+        const canViewInactive = canManage && (query.includeInactive === true || query.includeInactive === 'true');
+        const canViewTemporary = canManage || query.includeTemporary === true || query.includeTemporary === 'true';
         const conditions = [];
         if (!canViewInactive) {
             conditions.push(eq(laborCategories.isActive, true));
+        }
+        if (!canViewTemporary) {
+            conditions.push(eq(laborCategories.isPermanent, true));
         }
         if (query.categoryType) {
             conditions.push(eq(laborCategories.categoryType, query.categoryType));
@@ -55,6 +60,7 @@ export const laborCategoryRoutes = async (fastify) => {
             parentId: laborCategories.parentId,
             orderIndex: laborCategories.orderIndex,
             isActive: laborCategories.isActive,
+            isPermanent: laborCategories.isPermanent,
             createdBy: laborCategories.createdBy,
             creatorName: users.name,
             updatedBy: laborCategories.updatedBy,
@@ -420,7 +426,7 @@ export const laborCategoryRoutes = async (fastify) => {
     });
     // POST /api/v1/labor-categories
     fastify.post('/', {
-        preHandler: [requirePermission('labor_categories.create')],
+        preHandler: [requirePermission('labor_categories.create', 'labor_categories.manage', 'reports.create')],
         schema: {
             description: 'Create a new labor category under a specified classification',
             tags: ['Labor Categories'],
@@ -435,6 +441,7 @@ export const laborCategoryRoutes = async (fastify) => {
                     categoryType: { type: 'string', minLength: 1, maxLength: 50 },
                     orderIndex: { type: 'integer', minimum: 0 },
                     isActive: { type: 'boolean' },
+                    isPermanent: { type: 'boolean' },
                     parentId: { type: 'string', format: 'uuid' },
                 },
             },
@@ -468,6 +475,13 @@ export const laborCategoryRoutes = async (fastify) => {
                 .status(409)
                 .send(errorResponse('CONFLICT', 'A classification with this name already exists under the same parent.'));
         }
+        // Permissions check: Admins/managers can create permanent master categories.
+        // Field managers (with reports.create only) create temporary/field classifications (isPermanent: false)
+        // until approved/made permanent by an admin.
+        const canManageMaster = hasPermission(user.permissions, 'labor_categories.create') ||
+            hasPermission(user.permissions, 'labor_categories.manage') ||
+            hasPermission(user.permissions, '*');
+        const isPermanent = canManageMaster && body.isPermanent !== false;
         // Determine orderIndex if not provided
         let orderIndex = body.orderIndex;
         if (orderIndex === undefined) {
@@ -487,6 +501,7 @@ export const laborCategoryRoutes = async (fastify) => {
             parentId: body.parentId || null,
             orderIndex,
             isActive: body.isActive !== undefined ? body.isActive : true,
+            isPermanent,
             createdBy: user.id,
             updatedBy: user.id,
         })
@@ -502,11 +517,67 @@ export const laborCategoryRoutes = async (fastify) => {
                 nameHi: newCategory.nameHi,
                 categoryType: newCategory.categoryType,
                 orderIndex: newCategory.orderIndex,
+                isPermanent: newCategory.isPermanent,
             },
             ipAddress: request.ip,
             userAgent: request.headers['user-agent'],
         });
         return reply.status(201).send(successResponse(newCategory, 'Labor category created successfully'));
+    });
+    // PATCH /api/v1/labor-categories/:id/make-permanent
+    fastify.patch('/:id/make-permanent', {
+        preHandler: [requirePermission('labor_categories.edit', 'labor_categories.manage')],
+        schema: {
+            description: 'Promote a field-added temporary labor classification to permanent master status',
+            tags: ['Labor Categories'],
+            security: [{ bearerAuth: [] }],
+            params: {
+                type: 'object',
+                required: ['id'],
+                properties: {
+                    id: { type: 'string', format: 'uuid' },
+                },
+            },
+        },
+    }, async (request, reply) => {
+        const user = request.user;
+        const { id } = request.params;
+        const db = getDb();
+        const [existing] = await db
+            .select()
+            .from(laborCategories)
+            .where(eq(laborCategories.id, id))
+            .limit(1);
+        if (!existing) {
+            return reply.status(404).send(errorResponse('NOT_FOUND', 'Labor category not found'));
+        }
+        if (existing.isPermanent) {
+            return reply.send(successResponse(existing, 'Labor category is already permanent'));
+        }
+        const [updated] = await db
+            .update(laborCategories)
+            .set({
+            isPermanent: true,
+            updatedBy: user.id,
+            updatedAt: new Date(),
+        })
+            .where(eq(laborCategories.id, id))
+            .returning();
+        await recordAudit({
+            userId: user.id,
+            action: AuditAction.LABOR_CATEGORY_MADE_PERMANENT,
+            entityType: 'labor_category',
+            entityId: updated.id,
+            metadata: {
+                name: updated.name,
+                categoryType: updated.categoryType,
+                wasPermanent: false,
+                isPermanent: true,
+            },
+            ipAddress: request.ip,
+            userAgent: request.headers['user-agent'],
+        });
+        return reply.send(successResponse(updated, 'Labor category made permanent successfully'));
     });
     // PATCH /api/v1/labor-categories/:id
     fastify.patch('/:id', {

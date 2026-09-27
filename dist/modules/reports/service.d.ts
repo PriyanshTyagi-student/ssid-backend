@@ -61,13 +61,21 @@ export declare class ReportService {
         recentReports: any;
     }>;
     /**
-     * Export reports as CSV data.
+     * Export reports as multi-sheet Excel (.xlsx) and CSV data.
+     * Sheet 1: Labor Report
+     * Sheet 2: Material Report
+     * Sheet 3: Machinery Report
      */
     static exportReports(query: ListReportsQuery, user: any, ipAddress?: string, userAgent?: string): Promise<{
         csv: string;
         csvData: string;
+        xlsxBase64: string;
         filename: string;
+        csvFilename: string;
         totalRecords: any;
+        laborCount: number;
+        materialCount: number;
+        machineryCount: number;
     }>;
     /**
      * Get submission status for today's reports for the current user.

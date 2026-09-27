@@ -11,6 +11,7 @@ import { recordAudit } from '../audit/service.js';
 import { AuditAction, ReportStatus, type ReportTypeType } from '../../config/constants.js';
 import { hasPermission } from '../../config/permissions.js';
 import type { CreateReportInput, ListReportsQuery } from './schema.js';
+import * as XLSX from 'xlsx';
 
 function validateAndNormalizeSections(sections: any[], reportType?: string) {
   if (!sections || !Array.isArray(sections)) return;
@@ -681,7 +682,10 @@ export class ReportService {
   }
 
   /**
-   * Export reports as CSV data.
+   * Export reports as multi-sheet Excel (.xlsx) and CSV data.
+   * Sheet 1: Labor Report
+   * Sheet 2: Material Report
+   * Sheet 3: Machinery Report
    */
   static async exportReports(
     query: ListReportsQuery,
@@ -689,133 +693,390 @@ export class ReportService {
     ipAddress?: string,
     userAgent?: string
   ) {
-    const listResult = await this.listReports({ ...query, page: 1, limit: 2000 }, user);
+    const listResult = await this.listReports({ ...query, page: 1, limit: 5000 }, user);
     const rows = listResult.reports;
     const db = getDb();
 
-    let csvLines: string[] = [];
-    let filename = `Reports_Export_${new Date().toISOString().split('T')[0]}.csv`;
+    const reportIds = rows.map((r: any) => r.id);
+    let allSections: any[] = [];
+    let allEntries: any[] = [];
 
-    if (query.reportType === 'labor') {
-      // Detailed labor attendance export with classification snapshot and report-level totals
-      filename = `Labor_Attendance_Export_${new Date().toISOString().split('T')[0]}.csv`;
-      const headers = [
-        'Report Number',
-        'Report Date',
-        'Project',
-        'Site',
-        'Status',
-        'Submitted By',
-        'Labor Classification',
-        'Category Type',
-        'Total Workers',
-        'Present',
-        'Absent',
-        'Attendance %',
-        'Working Hours',
-        'Overtime Hours',
-        'Remarks',
-      ];
-      csvLines.push(headers.join(','));
+    if (reportIds.length > 0) {
+      allSections = await db
+        .select()
+        .from(reportSections)
+        .where(inArray(reportSections.reportId, reportIds))
+        .orderBy(reportSections.sortOrder);
 
-      let grandTotalWorkers = 0;
-      let grandTotalPresent = 0;
-      let grandTotalAbsent = 0;
-      let grandTotalHours = 0;
-      let grandTotalOt = 0;
-
-      for (const r of rows) {
-        const sections = await db
+      const sectionIds = allSections.map((s: any) => s.id);
+      if (sectionIds.length > 0) {
+        allEntries = await db
           .select()
-          .from(reportSections)
-          .where(eq(reportSections.reportId, r.id))
-          .orderBy(reportSections.sortOrder);
-
-        for (const sec of sections) {
-          const entries = await db
-            .select()
-            .from(reportEntries)
-            .where(eq(reportEntries.sectionId, sec.id))
-            .orderBy(reportEntries.sortOrder);
-
-          for (const ent of entries) {
-            const data = (ent.entryData || {}) as Record<string, any>;
-            const classification = data.classificationNameSnapshot || data.trade || data.agencyName || sec.sectionName;
-            const categoryType = data.categoryType || sec.sectionType.replace('labor_', '').replace('_labor', '');
-            const total = Number(data.totalWorkers ?? data.count ?? 0);
-            const present = Number(data.presentWorkers ?? (data.absentWorkers !== undefined ? total - Number(data.absentWorkers) : total));
-            const absent = Number(data.absentWorkers ?? (total - present));
-            const attRate = total > 0 ? ((present / total) * 100).toFixed(1) + '%' : '0.0%';
-            const workHours = Number(data.workingHours ?? data.standardHours ?? 8);
-            const otHours = Number(data.overtimeHours ?? 0);
-            const remarks = data.remarks || '';
-
-            grandTotalWorkers += total;
-            grandTotalPresent += present;
-            grandTotalAbsent += absent;
-            grandTotalHours += workHours;
-            grandTotalOt += otHours;
-
-            const line = [
-              `"${r.reportNumber}"`,
-              `"${r.reportDate}"`,
-              `"${r.projectName.replace(/"/g, '""')}"`,
-              `"${r.siteName.replace(/"/g, '""')}"`,
-              `"${r.status}"`,
-              `"${r.creatorName.replace(/"/g, '""')}"`,
-              `"${classification.replace(/"/g, '""')}"`,
-              `"${categoryType.replace(/"/g, '""')}"`,
-              total,
-              present,
-              absent,
-              `"${attRate}"`,
-              workHours,
-              otHours,
-              `"${String(remarks).replace(/"/g, '""')}"`,
-            ];
-            csvLines.push(line.join(','));
-          }
-        }
-      }
-
-      // Add report-level totals / summary row
-      const overallAttRate = grandTotalWorkers > 0 ? ((grandTotalPresent / grandTotalWorkers) * 100).toFixed(1) + '%' : '0.0%';
-      const summaryLine = [
-        `"TOTALS"`,
-        `""`,
-        `""`,
-        `""`,
-        `""`,
-        `""`,
-        `"ALL CLASSIFICATIONS"`,
-        `""`,
-        grandTotalWorkers,
-        grandTotalPresent,
-        grandTotalAbsent,
-        `"${overallAttRate}"`,
-        grandTotalHours,
-        grandTotalOt,
-        `""`,
-      ];
-      csvLines.push(summaryLine.join(','));
-    } else {
-      const headers = ['Report Number', 'Date', 'Type', 'Project', 'Site', 'Submitted By', 'Status', 'Created At'];
-      csvLines.push(headers.join(','));
-
-      for (const r of rows) {
-        const line = [
-          `"${r.reportNumber}"`,
-          `"${r.reportDate}"`,
-          `"${r.reportType}"`,
-          `"${r.projectName.replace(/"/g, '""')}"`,
-          `"${r.siteName.replace(/"/g, '""')}"`,
-          `"${r.creatorName.replace(/"/g, '""')}"`,
-          `"${r.status}"`,
-          `"${new Date(r.createdAt).toISOString()}"`,
-        ];
-        csvLines.push(line.join(','));
+          .from(reportEntries)
+          .where(inArray(reportEntries.sectionId, sectionIds))
+          .orderBy(reportEntries.sortOrder);
       }
     }
+
+    // Map sections and entries by reportId
+    const sectionsByReportId: Record<string, any[]> = {};
+    for (const sec of allSections) {
+      if (!sectionsByReportId[sec.reportId]) sectionsByReportId[sec.reportId] = [];
+      sectionsByReportId[sec.reportId].push(sec);
+    }
+
+    const entriesBySectionId: Record<string, any[]> = {};
+    for (const ent of allEntries) {
+      if (!entriesBySectionId[ent.sectionId]) entriesBySectionId[ent.sectionId] = [];
+      entriesBySectionId[ent.sectionId].push(ent);
+    }
+
+    // --- 1. LABOR REPORT SHEET ---
+    const laborHeaders = [
+      'Report Number',
+      'Report Date',
+      'Project',
+      'Site',
+      'Status',
+      'Submitted By',
+      'Labor Classification',
+      'Category Type',
+      'Total Workers',
+      'Present',
+      'Absent',
+      'Attendance %',
+      'Working Hours',
+      'Overtime Hours',
+      'Remarks',
+    ];
+    const laborAoA: any[][] = [laborHeaders];
+    const laborCsvLines: string[] = [laborHeaders.join(',')];
+
+    let grandTotalWorkers = 0;
+    let grandTotalPresent = 0;
+    let grandTotalAbsent = 0;
+    let grandTotalHours = 0;
+    let grandTotalOt = 0;
+
+    const laborReports = rows.filter((r: any) => r.reportType === 'labor');
+    for (const r of laborReports) {
+      const sections = sectionsByReportId[r.id] || [];
+      for (const sec of sections) {
+        const entries = entriesBySectionId[sec.id] || [];
+        for (const ent of entries) {
+          const data = (ent.entryData || {}) as Record<string, any>;
+          const classification =
+            data.classificationNameSnapshot ||
+            data.classificationName ||
+            data.trade ||
+            data.agencyName ||
+            sec.sectionName;
+          const categoryType = data.categoryType || sec.sectionType.replace('labor_', '').replace('_labor', '');
+          const total = Number(data.totalWorkers ?? data.count ?? 0);
+          const present = Number(data.presentWorkers ?? (data.absentWorkers !== undefined ? total - Number(data.absentWorkers) : total));
+          const absent = Number(data.absentWorkers ?? (total - present));
+          const attRate = total > 0 ? ((present / total) * 100).toFixed(1) + '%' : '0.0%';
+          const workHours = Number(data.workingHours ?? data.standardHours ?? 8);
+          const otHours = Number(data.overtimeHours ?? 0);
+          const remarks = data.remarks || '';
+
+          grandTotalWorkers += total;
+          grandTotalPresent += present;
+          grandTotalAbsent += absent;
+          grandTotalHours += workHours;
+          grandTotalOt += otHours;
+
+          laborAoA.push([
+            r.reportNumber,
+            r.reportDate,
+            r.projectName,
+            r.siteName,
+            r.status,
+            r.creatorName,
+            classification,
+            categoryType,
+            total,
+            present,
+            absent,
+            attRate,
+            workHours,
+            otHours,
+            remarks,
+          ]);
+
+          laborCsvLines.push([
+            `"${r.reportNumber}"`,
+            `"${r.reportDate}"`,
+            `"${r.projectName.replace(/"/g, '""')}"`,
+            `"${r.siteName.replace(/"/g, '""')}"`,
+            `"${r.status}"`,
+            `"${r.creatorName.replace(/"/g, '""')}"`,
+            `"${String(classification).replace(/"/g, '""')}"`,
+            `"${String(categoryType).replace(/"/g, '""')}"`,
+            total,
+            present,
+            absent,
+            `"${attRate}"`,
+            workHours,
+            otHours,
+            `"${String(remarks).replace(/"/g, '""')}"`,
+          ].join(','));
+        }
+      }
+    }
+
+    // Totals row for Labor
+    const overallAttRate = grandTotalWorkers > 0 ? ((grandTotalPresent / grandTotalWorkers) * 100).toFixed(1) + '%' : '0.0%';
+    laborAoA.push([
+      'TOTALS',
+      '',
+      '',
+      '',
+      '',
+      '',
+      'ALL CLASSIFICATIONS',
+      '',
+      grandTotalWorkers,
+      grandTotalPresent,
+      grandTotalAbsent,
+      overallAttRate,
+      grandTotalHours,
+      grandTotalOt,
+      '',
+    ]);
+    laborCsvLines.push([
+      '"TOTALS"',
+      '""',
+      '""',
+      '""',
+      '""',
+      '""',
+      '"ALL CLASSIFICATIONS"',
+      '""',
+      grandTotalWorkers,
+      grandTotalPresent,
+      grandTotalAbsent,
+      `"${overallAttRate}"`,
+      grandTotalHours,
+      grandTotalOt,
+      '""',
+    ].join(','));
+
+    // --- 2. MATERIAL REPORT SHEET ---
+    const materialHeaders = [
+      'Report Number',
+      'Report Date',
+      'Project',
+      'Site',
+      'Status',
+      'Submitted By',
+      'Section',
+      'Item Name',
+      'Opening Balance',
+      'Received',
+      'Consumed',
+      'Returned',
+      'Closing Balance',
+      'Unit',
+      'Location / Reason',
+      'Remarks',
+    ];
+    const materialAoA: any[][] = [materialHeaders];
+    const materialCsvLines: string[] = [materialHeaders.join(',')];
+
+    const materialReports = rows.filter((r: any) => r.reportType === 'material');
+    for (const r of materialReports) {
+      const sections = sectionsByReportId[r.id] || [];
+      for (const sec of sections) {
+        const entries = entriesBySectionId[sec.id] || [];
+        for (const ent of entries) {
+          const data = (ent.entryData || {}) as Record<string, any>;
+          const sectionName = sec.sectionName || sec.sectionType;
+          const itemName = data.itemName || data.item || data.materialName || '';
+          const opening = data.openingBalance !== undefined ? Number(data.openingBalance) : '';
+          const received = data.received !== undefined ? Number(data.received) : (sec.sectionType === 'material_received' ? Number(data.quantity || 0) : '');
+          const consumed = data.consumed !== undefined ? Number(data.consumed) : (sec.sectionType === 'material_consumed' ? Number(data.quantity || 0) : '');
+          const returned = data.returned !== undefined ? Number(data.returned) : (sec.sectionType === 'material_returned' ? Number(data.quantity || 0) : '');
+          const closing = data.closingBalance !== undefined ? Number(data.closingBalance) : '';
+          const unit = data.unit || '';
+          const locOrReason = data.location || data.reason || '';
+          const remarks = data.remarks || '';
+
+          materialAoA.push([
+            r.reportNumber,
+            r.reportDate,
+            r.projectName,
+            r.siteName,
+            r.status,
+            r.creatorName,
+            sectionName,
+            itemName,
+            opening,
+            received,
+            consumed,
+            returned,
+            closing,
+            unit,
+            locOrReason,
+            remarks,
+          ]);
+
+          materialCsvLines.push([
+            `"${r.reportNumber}"`,
+            `"${r.reportDate}"`,
+            `"${r.projectName.replace(/"/g, '""')}"`,
+            `"${r.siteName.replace(/"/g, '""')}"`,
+            `"${r.status}"`,
+            `"${r.creatorName.replace(/"/g, '""')}"`,
+            `"${String(sectionName).replace(/"/g, '""')}"`,
+            `"${String(itemName).replace(/"/g, '""')}"`,
+            opening !== '' ? opening : '""',
+            received !== '' ? received : '""',
+            consumed !== '' ? consumed : '""',
+            returned !== '' ? returned : '""',
+            closing !== '' ? closing : '""',
+            `"${String(unit).replace(/"/g, '""')}"`,
+            `"${String(locOrReason).replace(/"/g, '""')}"`,
+            `"${String(remarks).replace(/"/g, '""')}"`,
+          ].join(','));
+        }
+      }
+    }
+
+    // --- 3. MACHINERY REPORT SHEET ---
+    const machineryHeaders = [
+      'Report Number',
+      'Report Date',
+      'Project',
+      'Site',
+      'Status',
+      'Submitted By',
+      'Section',
+      'Equipment Name',
+      'Reg No / Machine ID',
+      'Operator Name',
+      'Hours Worked',
+      'Downtime Hours',
+      'Breakdown Reason',
+      'Action Taken',
+      'Fuel Issued (Litres)',
+      'Meter Reading',
+      'Activity / Location',
+      'Remarks',
+    ];
+    const machineryAoA: any[][] = [machineryHeaders];
+    const machineryCsvLines: string[] = [machineryHeaders.join(',')];
+
+    const machineryReports = rows.filter((r: any) => r.reportType === 'machinery');
+    for (const r of machineryReports) {
+      const sections = sectionsByReportId[r.id] || [];
+      for (const sec of sections) {
+        const entries = entriesBySectionId[sec.id] || [];
+        for (const ent of entries) {
+          const data = (ent.entryData || {}) as Record<string, any>;
+          const sectionName = sec.sectionName || sec.sectionType;
+          const equipName = data.equipmentName || data.name || '';
+          const regNo = data.registrationNumber || data.regNo || '';
+          const operator = data.operatorName || data.operator || '';
+          const hours = data.hoursWorked !== undefined ? Number(data.hoursWorked) : '';
+          const downtime = data.downtimeHours !== undefined ? Number(data.downtimeHours) : '';
+          const reason = data.reason || data.breakdownReason || '';
+          const action = data.actionTaken || '';
+          const fuel = data.fuelIssuedLitres !== undefined ? Number(data.fuelIssuedLitres) : (data.fuelQuantity !== undefined ? Number(data.fuelQuantity) : '');
+          const meter = data.meterReading || '';
+          const actOrLoc = data.activity || data.location || '';
+          const remarks = data.remarks || '';
+
+          machineryAoA.push([
+            r.reportNumber,
+            r.reportDate,
+            r.projectName,
+            r.siteName,
+            r.status,
+            r.creatorName,
+            sectionName,
+            equipName,
+            regNo,
+            operator,
+            hours,
+            downtime,
+            reason,
+            action,
+            fuel,
+            meter,
+            actOrLoc,
+            remarks,
+          ]);
+
+          machineryCsvLines.push([
+            `"${r.reportNumber}"`,
+            `"${r.reportDate}"`,
+            `"${r.projectName.replace(/"/g, '""')}"`,
+            `"${r.siteName.replace(/"/g, '""')}"`,
+            `"${r.status}"`,
+            `"${r.creatorName.replace(/"/g, '""')}"`,
+            `"${String(sectionName).replace(/"/g, '""')}"`,
+            `"${String(equipName).replace(/"/g, '""')}"`,
+            `"${String(regNo).replace(/"/g, '""')}"`,
+            `"${String(operator).replace(/"/g, '""')}"`,
+            hours !== '' ? hours : '""',
+            downtime !== '' ? downtime : '""',
+            `"${String(reason).replace(/"/g, '""')}"`,
+            `"${String(action).replace(/"/g, '""')}"`,
+            fuel !== '' ? fuel : '""',
+            `"${String(meter).replace(/"/g, '""')}"`,
+            `"${String(actOrLoc).replace(/"/g, '""')}"`,
+            `"${String(remarks).replace(/"/g, '""')}"`,
+          ].join(','));
+        }
+      }
+    }
+
+    // Build Multi-Sheet Excel Workbook (.xlsx)
+    const wb = XLSX.utils.book_new();
+    const wsLabor = XLSX.utils.aoa_to_sheet(laborAoA);
+    const wsMaterial = XLSX.utils.aoa_to_sheet(materialAoA);
+    const wsMachinery = XLSX.utils.aoa_to_sheet(machineryAoA);
+
+    XLSX.utils.book_append_sheet(wb, wsLabor, 'Labor Report');
+    XLSX.utils.book_append_sheet(wb, wsMaterial, 'Material Report');
+    XLSX.utils.book_append_sheet(wb, wsMachinery, 'Machinery Report');
+
+    const xlsxBuffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const xlsxBase64 = Buffer.from(xlsxBuffer).toString('base64');
+
+    // Build CSV:
+    // If only 'labor' was requested, return pure labor csv for strict compatibility with tests
+    let csvContent: string;
+    if (query.reportType === 'labor') {
+      csvContent = laborCsvLines.join('\n');
+    } else if (query.reportType === 'material') {
+      csvContent = materialCsvLines.join('\n');
+    } else if (query.reportType === 'machinery') {
+      csvContent = machineryCsvLines.join('\n');
+    } else {
+      // All 3 sheets in one CSV file separated by sheet headers
+      csvContent = [
+        '# ========================================================',
+        '# SHEET 1: DAILY LABOR REPORT',
+        '# ========================================================',
+        ...laborCsvLines,
+        '',
+        '# ========================================================',
+        '# SHEET 2: DAILY MATERIAL REPORT',
+        '# ========================================================',
+        ...materialCsvLines,
+        '',
+        '# ========================================================',
+        '# SHEET 3: DAILY MACHINERY REPORT',
+        '# ========================================================',
+        ...machineryCsvLines,
+      ].join('\n');
+    }
+
+    const dateStr = new Date().toISOString().split('T')[0];
+    const filename = `Reports_Export_${dateStr}.xlsx`;
+    const csvFilename = `Reports_Export_${dateStr}.csv`;
 
     await recordAudit({
       userId: user.id,
@@ -826,12 +1087,16 @@ export class ReportService {
       userAgent,
     });
 
-    const csvContent = csvLines.join('\n');
     return {
       csv: csvContent,
       csvData: csvContent,
+      xlsxBase64,
       filename,
+      csvFilename,
       totalRecords: rows.length,
+      laborCount: Math.max(0, laborAoA.length - 2), // exclude header and totals
+      materialCount: Math.max(0, materialAoA.length - 1),
+      machineryCount: Math.max(0, machineryAoA.length - 1),
     };
   }
 

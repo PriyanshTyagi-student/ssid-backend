@@ -459,4 +459,77 @@ describe('Labor Report Multi-Classification System', () => {
     expect(csv).toContain('Carpenter (बढ़ई)');
     expect(csv).toContain('TOTALS');
   });
+
+  it('Test 18 — Field manager creates temporary classification and admin promotes to permanent', async () => {
+    // Field manager (engineerToken) creates a custom classification
+    const uniqueName = `Tile Cutter ${Date.now()}`;
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/labor-categories',
+      headers: { Authorization: `Bearer ${engineerToken}` },
+      payload: {
+        name: uniqueName,
+        categoryType: 'skilled',
+      },
+    });
+
+    expect(createRes.statusCode).toBe(201);
+    const createBody = JSON.parse(createRes.payload);
+    expect(createBody.success).toBe(true);
+    expect(createBody.data.isPermanent).toBe(false); // Temporary by default for field manager
+
+    const newId = createBody.data.id;
+
+    // Normal list without includeTemporary should not list it
+    const listRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/labor-categories',
+      headers: { Authorization: `Bearer ${engineerToken}` },
+    });
+    const listBody = JSON.parse(listRes.payload);
+    const foundInList = listBody.data.some((c: any) => c.id === newId);
+    expect(foundInList).toBe(false);
+
+    // Admin promotes to permanent
+    const promoteRes = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/labor-categories/${newId}/make-permanent`,
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    expect(promoteRes.statusCode).toBe(200);
+    const promoteBody = JSON.parse(promoteRes.payload);
+    expect(promoteBody.data.isPermanent).toBe(true);
+
+    // Now listed in master list
+    const finalListRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/labor-categories',
+      headers: { Authorization: `Bearer ${engineerToken}` },
+    });
+    const finalListBody = JSON.parse(finalListRes.payload);
+    const foundInFinalList = finalListBody.data.some((c: any) => c.id === newId);
+    expect(foundInFinalList).toBe(true);
+  });
+
+  it('Test 19 — Multi-sheet Excel workbook export returns valid base64 with all 3 sheets', async () => {
+    const exportRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/reports/export',
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+
+    expect(exportRes.statusCode).toBe(200);
+    const body = JSON.parse(exportRes.payload);
+    expect(body.success).toBe(true);
+    expect(body.data.xlsxBase64).toBeDefined();
+    expect(body.data.filename).toMatch(/\.xlsx$/);
+
+    // Verify xlsx workbook sheets
+    const XLSX = await import('xlsx');
+    const buf = Buffer.from(body.data.xlsxBase64, 'base64');
+    const wb = XLSX.read(buf, { type: 'buffer' });
+    expect(wb.SheetNames).toContain('Labor Report');
+    expect(wb.SheetNames).toContain('Material Report');
+    expect(wb.SheetNames).toContain('Machinery Report');
+  });
 });

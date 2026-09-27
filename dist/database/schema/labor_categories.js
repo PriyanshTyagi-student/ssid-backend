@@ -9,6 +9,7 @@ export const laborCategories = pgTable('labor_categories', {
     parentId: uuid('parent_id').references(() => laborCategories.id), // For hierarchical classifications
     orderIndex: integer('order_index').notNull().default(0),
     isActive: boolean('is_active').notNull().default(true),
+    isPermanent: boolean('is_permanent').notNull().default(true),
     createdBy: uuid('created_by').references(() => users.id),
     updatedBy: uuid('updated_by').references(() => users.id),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -18,6 +19,7 @@ export const laborCategories = pgTable('labor_categories', {
     index('labor_cat_type_idx').on(table.categoryType),
     index('labor_cat_order_idx').on(table.orderIndex),
     index('labor_cat_active_idx').on(table.isActive),
+    index('labor_cat_permanent_idx').on(table.isPermanent),
     index('labor_cat_parent_idx').on(table.parentId),
 ]);
 //# sourceMappingURL=labor_categories.js.map

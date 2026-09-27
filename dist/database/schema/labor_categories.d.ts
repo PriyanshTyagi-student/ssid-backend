@@ -146,6 +146,23 @@ export declare const laborCategories: import("drizzle-orm/pg-core").PgTableWithC
             identity: undefined;
             generated: undefined;
         }, {}, {}>;
+        isPermanent: import("drizzle-orm/pg-core").PgColumn<{
+            name: "is_permanent";
+            tableName: "labor_categories";
+            dataType: "boolean";
+            columnType: "PgBoolean";
+            data: boolean;
+            driverParam: boolean;
+            notNull: true;
+            hasDefault: true;
+            isPrimaryKey: false;
+            isAutoincrement: false;
+            hasRuntimeDefault: false;
+            enumValues: undefined;
+            baseColumn: never;
+            identity: undefined;
+            generated: undefined;
+        }, {}, {}>;
         createdBy: import("drizzle-orm/pg-core").PgColumn<{
             name: "created_by";
             tableName: "labor_categories";

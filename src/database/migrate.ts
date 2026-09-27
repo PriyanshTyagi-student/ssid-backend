@@ -255,6 +255,7 @@ export async function runMigrations() {
     await ensureColumn('labor_categories', 'name_en', 'ALTER TABLE labor_categories ADD COLUMN name_en VARCHAR(150)');
     await ensureColumn('labor_categories', 'name_hi', 'ALTER TABLE labor_categories ADD COLUMN name_hi VARCHAR(150)');
     await ensureColumn('labor_categories', 'parent_id', 'ALTER TABLE labor_categories ADD COLUMN parent_id UUID REFERENCES labor_categories(id)');
+    await ensureColumn('labor_categories', 'is_permanent', 'ALTER TABLE labor_categories ADD COLUMN is_permanent BOOLEAN NOT NULL DEFAULT true');
 
     logger.info('[MIGRATION] All tables, indexes, and constraints verified successfully.');
   } catch (err) {
